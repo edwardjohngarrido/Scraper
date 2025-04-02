@@ -1,0 +1,22 @@
+{
+   "action": {
+      "default_icon": "logo_icon_black_bg.png",
+      "default_popup": "hello.html"
+   },
+   "browser_specific_settings": {
+      "gecko": {
+         "id": "greg@toughdata.net"
+      }
+   },
+   "content_scripts": [ {
+      "all_frames": false,
+      "js": [ "script.js" ],
+      "matches": [ "https://*.tiktok.com/*" ]
+   } ],
+   "description": "Automatically bypass any TikTok rotate, puzzle, or shapes captcha",
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsXA3CbzfZA16Fr30kiVmgKb6a66JbL6Jrq5DlsOO3rhe3I+cwH6z0P8YkaGIjijJCb30rzEdU/aisLFj0YOyTw4t9yXii0VtmqM9LR7TR3BpQ9hexZoijTfa52Kc683LkpjIy7m4RoCauKjOe1EGuGaixB1ivebZZDUSujLhlkMEtpez5pI7c1b0A7STbjQqzH66/02G8sgTNDFGDpfPq9shBroxPettO1GuVxWDokfUnUhwTY41FqYA5B8fiuCpqL5swi9ugSoXxUZOzNLahzYD6Vgg6HFwacJGOtrdogTqdS8XrAfoaL0JgxKDfkAjSFXTDarA4nV3IGF/xFBiTQIDAQAB",
+   "manifest_version": 3,
+   "name": "TikTok Captcha Solver",
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "3.0"
+}

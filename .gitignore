@@ -1,0 +1,14 @@
+# node stuff
+node_modules/
+npm-debug.log
+
+# local secrets
+credentials.json
+.env
+
+# logs
+run_log.json
+traffic_log.csv
+
+# VSCode
+.vscode/

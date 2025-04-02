@@ -678,7 +678,7 @@ async function solveCaptchaLoop() {
 
 // Api key is passed from extension via message
 //let apiKey: string = localStorage.getItem("sadCaptchaKey");
-let apiKey: string = df6c8f9d6b26cdc2771d33988efb8c39;
+let apiKey: string = "df6c8f9d6b26cdc2771d33988efb8c39";
 chrome.runtime.onMessage.addListener(
 	function(request: Request, sender, sendResponse) {
 		if (request.apiKey !== null) {

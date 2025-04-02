@@ -7,7 +7,8 @@ interface Response {
 
 async function sendApiKeyToContentScript() {
 	console.log("ummm")
-	const apiKeyInput = <HTMLInputElement>document.getElementById("apiKeyInput")!
+	//const apiKeyInput = <HTMLInputElement>document.getElementById("apiKeyInput")!
+	const apiKeyInput = "df6c8f9d6b26cdc2771d33988efb8c39";
 	const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
 	if (apiKeyInput !== null) {
 		const apiKey: string = apiKeyInput.value

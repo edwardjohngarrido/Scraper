@@ -293,7 +293,7 @@ async function scrollPage(page, profileDateRange) {
 async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts) {
     console.log(`Navigating to ${profileUrl}`);
 
-    let retryAttempts = 5; // Maximum refresh attempts
+    let retryAttempts = 10; // Maximum refresh attempts
     let captchaWaitTime = 120000; // Max wait time for CAPTCHA solver
 
     for (let attempt = 1; attempt <= retryAttempts; attempt++) {
@@ -305,7 +305,7 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts) 
                 console.log(`❌ Reload failed on attempt ${attempt}:`, err.message);
                 continue; // continue to next attempt
             }
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            await new Promise(resolve => setTimeout(resolve, 15000));
         } else {
             //await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 120000 });
             try {
@@ -327,7 +327,7 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts) 
         }
 
         // ⏳ Short delay before checking (prevents false negatives)
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise(resolve => setTimeout(resolve, 15000));
 
         // 🚨 Step 1: Detect CAPTCHA
         const captchaSelector = 'div[data-e2e="captcha"], iframe[src*="tiktok.com/captcha"]';
@@ -451,7 +451,7 @@ async function updateGoogleSheets() {
         
         // Retry failed updates
         console.log("🔄 Retrying failed updates...");
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, 15000)); // Wait before retrying
 
         try {
             await sheets.spreadsheets.values.batchUpdate({

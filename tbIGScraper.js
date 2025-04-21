@@ -1,9 +1,10 @@
-// Instagram Reels Scraper - Tier 3 Upgraded with Smart Scroll and Proxy Logic
+// Instagram Reels Scraper - Tier 3 Upgraded with Smart Scroll and Proxy Logic + Humanized Post Clicks
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const { google } = require('googleapis');
+const readline = require('readline');
 puppeteer.use(StealthPlugin());
 
 const COOKIES_PATH = './cookies.json';
@@ -12,6 +13,7 @@ const SHEET_NAME = 'Sheet1';
 const SCROLL_WAIT_TIME = 4000;
 const MAX_SCROLLS = 15;
 const SMARTPROXY_ENABLED = false;
+const RANDOM_CLICK_CHANCE = 0.08; // 8% chance to open even if datetime exists
 
 function getRandomUserAgent() {
   const agents = [
@@ -36,11 +38,7 @@ async function launchBrowser() {
     '--disable-setuid-sandbox',
     `--user-agent=${getRandomUserAgent()}`
   ];
-
-  return await puppeteer.launch({
-    headless: false,
-    args
-  });
+  return await puppeteer.launch({ headless: false, args });
 }
 
 async function loadCookies(page) {
@@ -72,8 +70,9 @@ async function fetchSheetData() {
   const profileMap = {};
 
   rows.forEach((row, index) => {
-    const profileLink = row[0];  // Column M
-    const postLinkRaw = row[1];  // Column N
+    const profileLink = row[0];
+    const postLinkRaw = row[1];
+    const hasDatetime = !!row[4]; // Column Q (index 4)
     if (!profileLink || !postLinkRaw) return;
     if (!profileLink.includes('instagram.com')) {
       console.warn(`⚠️ Skipping invalid profile link at row ${index + 2}`);
@@ -81,10 +80,20 @@ async function fetchSheetData() {
     }
     const postLink = postLinkRaw.split('?')[0].replace(/\/$/, '');
     if (!profileMap[profileLink]) profileMap[profileLink] = [];
-    profileMap[profileLink].push({ postLink, rowIndex: index + 2 });
+    profileMap[profileLink].push({ postLink, rowIndex: index + 2, needsDate: !hasDatetime });
   });
 
   return profileMap;
+}
+
+async function hoverElement(page, elementHandle) {
+  const box = await elementHandle.boundingBox();
+  if (box) {
+    const x = box.x + box.width / 2 + (Math.random() * 10 - 5);
+    const y = box.y + box.height / 2 + (Math.random() * 10 - 5);
+    await page.mouse.move(x, y);
+    await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 700));
+  }
 }
 
 async function scrollAndScrape(page, profile, posts, updateQueue) {
@@ -99,31 +108,41 @@ async function scrollAndScrape(page, profile, posts, updateQueue) {
 
   const postIdToRow = {};
   const postIdTargets = new Set();
-  const foundIds = new Set();
+  const postMeta = {};
 
-  posts.forEach(({ postLink, rowIndex }) => {
+  posts.forEach(({ postLink, rowIndex, needsDate }) => {
     const postId = postLink.split('/reel/')[1]?.replaceAll('/', '').split('?')[0];
     if (postId) {
       postIdToRow[postId] = rowIndex;
       postIdTargets.add(postId);
+      postMeta[postId] = { needsDate };
     }
   });
 
-  console.log(`🎯 Targeting ${posts.length} posts: ${[...postIdTargets].join(', ')}`);
-
+  const foundIds = new Set();
   let scrollCount = 0;
   let lastHeight = await page.evaluate(() => document.body.scrollHeight);
   let noNewMatchesStreak = 0;
 
   while (scrollCount < MAX_SCROLLS && foundIds.size < postIdTargets.size) {
     console.log(`🌀 Scroll attempt ${scrollCount + 1}`);
+
+    // Optional scroll jitter
+    const jitter = Math.random() < 0.3;
+    if (jitter) {
+      console.log('↕️ Scroll jitter triggered.');
+      await page.evaluate(() => window.scrollBy(0, -200));
+      await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+    }
+
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await new Promise(resolve => setTimeout(resolve, SCROLL_WAIT_TIME));
+    await new Promise(resolve => setTimeout(resolve, SCROLL_WAIT_TIME + Math.random() * 2000));
 
     const anchors = await page.$$('a[href*="/reel/"]');
     console.log(`📸 Found ${anchors.length} visible reel links on grid.`);
 
     let matchesThisScroll = 0;
+    let wrongClickHappened = false;
 
     for (const anchor of anchors) {
       const href = await anchor.evaluate(a => a.href);
@@ -131,7 +150,21 @@ async function scrollAndScrape(page, profile, posts, updateQueue) {
 
       const match = href.match(/\/reel\/([\w-]+)/);
       const postId = match ? match[1] : null;
-      if (!postId || foundIds.has(postId) || !postIdTargets.has(postId)) continue;
+      if (!postId) continue;
+
+      await hoverElement(page, anchor);
+
+      if (!postIdTargets.has(postId) && !wrongClickHappened && Math.random() < 0.1) {
+        console.log(`🙃 Randomly opening non-target post: ${href}`);
+        await anchor.click();
+        await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000));
+        await page.keyboard.press('Escape');
+        await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000));
+        wrongClickHappened = true;
+        continue;
+      }
+
+      if (foundIds.has(postId) || !postIdTargets.has(postId)) continue;
 
       foundIds.add(postId);
       matchesThisScroll++;
@@ -145,18 +178,26 @@ async function scrollAndScrape(page, profile, posts, updateQueue) {
         if (!viewsRaw) console.warn(`⚠️ No views found for post ${href}`);
         console.log(`👁️ View Count: ${views}`);
 
-        await anchor.click();
-        await page.waitForSelector('time[datetime]', { timeout: 10000 });
-        const dateTime = await page.$eval('time[datetime]', el => el.getAttribute('datetime'));
-        if (!dateTime) console.warn(`⚠️ No datetime found for post ${href}`);
-        console.log(`📅 Post Date: ${dateTime}`);
-
         const row = postIdToRow[postId];
         updateQueue.push({ range: `${SHEET_NAME}!O${row}`, values: [[views]] });
-        updateQueue.push({ range: `${SHEET_NAME}!Q${row}`, values: [[dateTime]] });
 
-        await page.keyboard.press('Escape');
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        const shouldOpen = postMeta[postId].needsDate || Math.random() < RANDOM_CLICK_CHANCE;
+
+        if (shouldOpen) {
+          console.log(`🧠 Opening viewer for ${postId} to get datetime.`);
+          await anchor.click();
+          await page.waitForSelector('time[datetime]', { timeout: 10000 });
+          const dateTime = await page.$eval('time[datetime]', el => el.getAttribute('datetime'));
+          if (!dateTime) console.warn(`⚠️ No datetime found for post ${href}`);
+          console.log(`📅 Post Date: ${dateTime}`);
+          updateQueue.push({ range: `${SHEET_NAME}!Q${row}`, values: [[dateTime]] });
+          const delay = Math.floor(Math.random() * 3000) + 2000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+          await page.keyboard.press('Escape');
+          await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+        } else {
+          console.log(`🙈 Skipping viewer for ${postId} (datetime already present)`);
+        }
       } catch (err) {
         console.warn(`⚠️ Error scraping post ${href}: ${err.message}`);
         continue;
@@ -228,14 +269,44 @@ async function runScraper() {
     const start = Date.now();
     await scrollAndScrape(page, profile, profileMap[profile], updateQueue);
     const end = Date.now();
+    const pause = 3000 + Math.random() * 5000;
     console.log(`⏱️ Finished profile in ${(end - start) / 1000}s`);
-    console.log(`⏸ Pausing 5 seconds before next profile...`);
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    console.log(`⏸ Pausing ${(pause / 1000).toFixed(1)}s before next profile...`);
+    await new Promise(resolve => setTimeout(resolve, pause));
   }
 
-  await updateSheetBatch(updateQueue);
+  // 🌐 Wander to explore page between profiles
+    if (Math.random() < 0.7) {
+      console.log('🧭 Wandering through explore page...');
+      await page.goto('https://www.instagram.com/explore/', { waitUntil: 'domcontentloaded' });
+      await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000));
+    }
+
+    await updateSheetBatch(updateQueue);
   await browser.close();
   console.log('✅ All profiles processed.');
 }
 
 runScraper().catch(console.error);
+
+async function loginAndSaveCookies() {
+  const browser = await launchBrowser();
+  const page = await browser.newPage();
+  await page.goto('https://www.instagram.com/accounts/login/', {
+    waitUntil: 'networkidle2',
+    timeout: 60000,
+  });
+  console.log('🔐 Please log in manually in the browser.');
+  console.log('✅ Once you are fully logged in and see your feed, press Enter in the terminal.');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.question('', async () => {
+    const cookies = await page.cookies();
+    fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2));
+    console.log('✅ Cookies saved to cookies.json');
+    await browser.close();
+    rl.close();
+    process.exit();
+  });
+}
+
+//loginAndSaveCookies();

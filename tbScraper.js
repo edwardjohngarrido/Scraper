@@ -225,18 +225,45 @@ async function scrollPage(page, profileDateRange) {
         let newPostsFound = false;
         let allOutOfRange = true; // Flag to track if all posts are out of range
 
+        // for (const link of postLinks) {
+        //     const postId = extractPostId(link);
+        //     if (postId && !allLoadedPosts.has(link)) {
+        //         const postDate = convertPostIdToDate(postId);
+                
+        //         console.log(`🔍 Post found: ${link} | Date: ${postDate.toUTCString()}`);
+
+        //         if (!isNaN(postDate.getTime())) {
+        //             allLoadedPosts.add(link);
+        //             allLoadedPostTimestamps.add(postDate);
+
+        //             // ✅ Check if post is within date range
+        //             if (postDate >= profileDateRange.minDate && postDate <= profileDateRange.maxDate) {
+        //                 newPostsFound = true;
+        //                 allOutOfRange = false;
+        //             }
+        //         }
+        //     }
+        // }
+        const cutoffDate = new Date();
+        cutoffDate.setMonth(cutoffDate.getMonth() - 2);
+        console.log(`🧹 Skipping posts older than: ${cutoffDate.toUTCString()}`);
+
         for (const link of postLinks) {
             const postId = extractPostId(link);
             if (postId && !allLoadedPosts.has(link)) {
                 const postDate = convertPostIdToDate(postId);
-                
+        
                 console.log(`🔍 Post found: ${link} | Date: ${postDate.toUTCString()}`);
 
                 if (!isNaN(postDate.getTime())) {
+                    if (postDate < cutoffDate) {
+                        console.log(`⏭️ Skipping post (too old): ${postDate.toUTCString()} (${link})`);
+                        continue;
+                    }
+
                     allLoadedPosts.add(link);
                     allLoadedPostTimestamps.add(postDate);
 
-                    // ✅ Check if post is within date range
                     if (postDate >= profileDateRange.minDate && postDate <= profileDateRange.maxDate) {
                         newPostsFound = true;
                         allOutOfRange = false;
@@ -244,6 +271,7 @@ async function scrollPage(page, profileDateRange) {
                 }
             }
         }
+
 
         const newHeight = await page.evaluate(() => document.body.scrollHeight);
 

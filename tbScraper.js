@@ -217,100 +217,86 @@ async function scrollPage(page, profileDateRange) {
         return match ? match[2] : null;
     }
 
-    while (!stopScrolling || allLoadedPosts.size === 0 && scrollCount < maxScrolls) {
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await new Promise(resolve => setTimeout(resolve, 3000));
+    let tooOldCount = 0;
+const cutoffDate = new Date();
+cutoffDate.setMonth(cutoffDate.getMonth() - 2);
+console.log(`🧹 Skipping posts older than: ${cutoffDate.toUTCString()}`);
 
-        const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', posts => posts.map(post => post.href));
-        let newPostsFound = false;
-        let allOutOfRange = true; // Flag to track if all posts are out of range
+while (!stopScrolling || (allLoadedPosts.size === 0 && scrollCount < maxScrolls)) {
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-        // for (const link of postLinks) {
-        //     const postId = extractPostId(link);
-        //     if (postId && !allLoadedPosts.has(link)) {
-        //         const postDate = convertPostIdToDate(postId);
-                
-        //         console.log(`🔍 Post found: ${link} | Date: ${postDate.toUTCString()}`);
+    const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', posts => posts.map(post => post.href));
+    let newPostsFound = false;
+    let allOutOfRange = true;
 
-        //         if (!isNaN(postDate.getTime())) {
-        //             allLoadedPosts.add(link);
-        //             allLoadedPostTimestamps.add(postDate);
+    for (const link of postLinks) {
+        const postId = extractPostId(link);
+        if (postId && !allLoadedPosts.has(link)) {
+            const postDate = convertPostIdToDate(postId);
+            console.log(`🔍 Post found: ${link} | Date: ${postDate.toUTCString()}`);
 
-        //             // ✅ Check if post is within date range
-        //             if (postDate >= profileDateRange.minDate && postDate <= profileDateRange.maxDate) {
-        //                 newPostsFound = true;
-        //                 allOutOfRange = false;
-        //             }
-        //         }
-        //     }
-        // }
-        const cutoffDate = new Date();
-        cutoffDate.setMonth(cutoffDate.getMonth() - 2);
-        console.log(`🧹 Skipping posts older than: ${cutoffDate.toUTCString()}`);
+            if (!isNaN(postDate.getTime())) {
+                if (postDate < cutoffDate) {
+                    tooOldCount++;
+                    console.log(`⏭️ Skipping post (too old): ${postDate.toUTCString()} (${link})`);
 
-        for (const link of postLinks) {
-            const postId = extractPostId(link);
-            if (postId && !allLoadedPosts.has(link)) {
-                const postDate = convertPostIdToDate(postId);
-        
-                console.log(`🔍 Post found: ${link} | Date: ${postDate.toUTCString()}`);
-
-                if (!isNaN(postDate.getTime())) {
-                    if (postDate < cutoffDate) {
-                        console.log(`⏭️ Skipping post (too old): ${postDate.toUTCString()} (${link})`);
-                        continue;
+                    if (tooOldCount >= 3) {
+                        console.log("🛑 Hit 3 consecutive too-old posts. Stopping scroll.");
+                        stopScrolling = true;
+                        break;
                     }
+                    continue;
+                }
 
-                    allLoadedPosts.add(link);
-                    allLoadedPostTimestamps.add(postDate);
+                tooOldCount = 0; // reset if we find a valid one
+                allLoadedPosts.add(link);
+                allLoadedPostTimestamps.add(postDate);
 
-                    if (postDate >= profileDateRange.minDate && postDate <= profileDateRange.maxDate) {
-                        newPostsFound = true;
-                        allOutOfRange = false;
-                    }
+                if (postDate >= profileDateRange.minDate && postDate <= profileDateRange.maxDate) {
+                    newPostsFound = true;
+                    allOutOfRange = false;
                 }
             }
         }
+    }
 
+    if (stopScrolling) break;
 
-        const newHeight = await page.evaluate(() => document.body.scrollHeight);
+    const newHeight = await page.evaluate(() => document.body.scrollHeight);
 
-        // ✅ Stop scrolling if all posts are outside of date range
-        if (allOutOfRange && allLoadedPosts.size > 0) {
-            console.log("❌ All posts are out of date range. Stopping scroll.");
+    if (allOutOfRange && allLoadedPosts.size > 0) {
+        console.log("❌ All posts are out of date range. Stopping scroll.");
+        stopScrolling = true;
+        break;
+    }
+
+    if (allLoadedPostTimestamps.size > 0 && (!newPostsFound || newHeight === lastHeight)) {
+        emptyScrollCount++;
+
+        const minTimestamp = new Date(Math.min(...Array.from(allLoadedPostTimestamps).map(d => d.getTime())));
+        if (minTimestamp <= profileDateRange.minDate) {
+            console.log('✅ All dataset posts within date range found. Stopping scroll.');
             stopScrolling = true;
             break;
-        }
-
-        if (allLoadedPostTimestamps.size > 0 && (!newPostsFound || newHeight === lastHeight)) {
-            emptyScrollCount++;
-
-            const minTimestamp = new Date(Math.min(...Array.from(allLoadedPostTimestamps).map(d => d.getTime())));
-            const maxTimestamp = new Date(Math.max(...Array.from(allLoadedPostTimestamps).map(d => d.getTime())));
-
-            console.log(`🔍 Loaded Posts Range: Min=${minTimestamp.toUTCString()}, Max=${maxTimestamp.toUTCString()}`);
-
-            if (minTimestamp <= profileDateRange.minDate) {
-                console.log('✅ All dataset posts within date range found. Stopping scroll.');
-                stopScrolling = true;
-                break;
-            } else if (emptyScrollCount >= 5 && !stopScrolling) {
-                console.log("🔄 Detected scrolling stuck. Resetting scroll position...");
-                await page.evaluate(() => window.scrollTo(0, 0)); 
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); 
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                emptyScrollCount = 0;
-            } else {
-                console.log('🔄 More posts needed within date range. Continuing scroll...');
-            }
-        } else {
+        } else if (emptyScrollCount >= 5) {
+            console.log("🔄 Detected scrolling stuck. Resetting scroll position...");
+            await page.evaluate(() => window.scrollTo(0, 0));
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+            await new Promise(resolve => setTimeout(resolve, 3000));
             emptyScrollCount = 0;
+        } else {
+            console.log('🔄 More posts needed within date range. Continuing scroll...');
         }
-
-        lastHeight = newHeight;
-        scrollCount++;
+    } else {
+        emptyScrollCount = 0;
     }
+
+    lastHeight = newHeight;
+    scrollCount++;
+}
+
 
     console.log('⌛ Final wait for posts to stabilize...');
     await new Promise(resolve => setTimeout(resolve, 5000));
@@ -318,7 +304,136 @@ async function scrollPage(page, profileDateRange) {
     return allLoadedPosts;
 }
 
-async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts) {
+async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint) {
+    const BRAND_TAGS = [
+        '@In Print We Trust',
+        '@in print we trust',
+        '@InPrintWeTrust',
+        '@inprintwetrust',
+        '@inprintwetrust.co',
+        '@InPrintWeTrust.co',
+        '#InPrintWeTrust',
+        '#inprintwetrust',
+        '#IPWT',
+        '#ipwt'
+      ];
+      
+      let collectedLinks = [];
+      console.log(`📍 Starting scrape for profile: ${profileUrl}`);
+      console.log(`🧠 lastKnownLink passed: ${lastKnownLink}`);
+
+      
+      await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      let seenPostLinks = new Set();
+      let reachedLastKnownPost = false;
+      
+      // ✅ Find the first non-pinned video by skipping elements that contain the pinned badge
+      const thumbnails = await page.$$('a[href*="/video/"]');
+      let clicked = false;
+      
+      for (const thumb of thumbnails) {
+          const badge = await thumb.$('div[data-e2e="video-card-badge"]');
+          if (!badge) {
+              await thumb.click(); // 👈 Open viewer with actual click
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              clicked = true;
+              break;
+          }
+      }
+      
+      if (!clicked) {
+          console.log('⚠️ No non-pinned videos found to start viewer.');
+          return;
+      }      
+
+      
+      let seenLinks = new Set();
+let newLinks = [];
+let scrolling = true;
+
+while (scrolling) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const currentUrl = page.url().split('?')[0];
+    const isPreviouslySeen = Array.isArray(lastKnownLink)
+    ? lastKnownLink.includes(currentUrl)
+    : currentUrl === lastKnownLink;
+
+if (isPreviouslySeen) {
+    console.log(`🛑 Hit one of last known links: ${currentUrl}. Stopping.`);
+    break;
+}
+
+
+    if (!seenLinks.has(currentUrl)) {
+        seenLinks.add(currentUrl);
+
+        const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
+        const postId = postIdMatch ? postIdMatch[2] : null;
+
+        if (!postId) {
+            console.log(`❌ Invalid post URL (no ID): ${currentUrl}`);
+        } else if (postId in existingPosts) {
+            console.log(`⚠️ Post ID already exists in sheet: ${postId}`);
+        } else {
+            let valid = false;
+        
+            if (isInprint) {
+                valid = true;
+            } else {
+                const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
+                valid = BRAND_TAGS.some(tag => desc.includes(tag));
+            }
+        
+            if (valid) {
+                console.log(`📥 Adding new post: ${currentUrl}`);
+                collectedLinks.push(currentUrl);
+            } else {
+                console.log(`⏭️ Skipping post (no tag match): ${currentUrl}`);
+            }
+        }
+    }
+
+    await page.keyboard.press('ArrowDown');
+}
+
+console.log("🧪 Collected links ready for writing:", collectedLinks);
+
+
+      // ✅ Append only to the next empty row in Column C
+if (collectedLinks.length > 0) {
+    const sheets = await initSheets();
+  
+    // Get current data in column C to find the last non-empty row
+    const existing = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!C:C',
+    });
+  
+    const existingValues = existing.data.values || [];
+    const nextRow = existingValues.length + 1;
+  
+    const values = collectedLinks.map(link => [link]); // Single column
+  
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `Sheet1!C${nextRow}`,
+      valueInputOption: 'RAW',
+      resource: {
+        values: values
+      }
+    });
+  
+    console.log(`✅ Successfully appended ${collectedLinks.length} new links to Column C, starting at row ${nextRow}.`);
+    console.log("📤 Links appended:");
+    console.log(collectedLinks);
+  } else {
+    console.log("ℹ️ No new links to append.");
+  }
+  
+
+    
     console.log(`Navigating to ${profileUrl}`);
 
     let retryAttempts = 10; // Maximum refresh attempts
@@ -418,11 +533,6 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts) 
         const scrapedPostIdMatch = post.match(/\/(video|photo)\/(\d+)/);
         if (!scrapedPostIdMatch) continue;
         const scrapedPostId = scrapedPostIdMatch[2];
-
-        if (!(scrapedPostId in existingPosts)) {
-            console.log(`⚠️ Skipping post not found in Google Sheets: ${post}`);
-            continue;
-        }
 
 
         try {
@@ -562,11 +672,58 @@ async function fetchSmartproxyTraffic() {
     }
 }
 
+async function getLastKnownLinks() {
+    const sheets = await initSheets();
+    const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: 'Sheet1!A:C',
+    });
+
+    const rows = response.data.values || [];
+    const lastKnownLinks = {};
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i];
+        const profile = row[1];
+        const postUrl = row[2];
+
+        if (!profile || !postUrl) continue;
+
+        const cleanUrl = postUrl.split('?')[0];
+        const match = cleanUrl.match(/\/(video|photo)\/(\d+)/);
+        if (!match) continue;
+
+        if (!lastKnownLinks[profile]) {
+            lastKnownLinks[profile] = [];
+        }
+
+        // Push only if not already included
+        if (!lastKnownLinks[profile].includes(cleanUrl)) {
+            lastKnownLinks[profile].push(cleanUrl);
+        }
+
+        // Stop once we have 5 recent links
+        if (lastKnownLinks[profile].length >= 5) continue;
+    }
+
+    // Normalize profile keys
+    const normalized = {};
+    for (const [profile, links] of Object.entries(lastKnownLinks)) {
+        normalized[profile.replace(/\/$/, '')] = links;
+    }
+
+    console.log("🧾 Last known links loaded (top 5):", normalized);
+    return normalized;
+}
+
 /** Process TikTok Profiles */
 async function processProfiles() {
     const { profileDateRanges, sortedProfiles } = await getProfileDateRanges();
     const profiles = [...sortedProfiles]; // prioritized order
     console.log(`🚀 Processing ${profiles.length} profiles...`);
+
+    const lastKnownLinks = await getLastKnownLinks();
+
 
     const prioritizedProfiles = new Set(sortedProfiles.slice(0, 10));
 
@@ -577,13 +734,21 @@ async function processProfiles() {
         range: 'Sheet1!A:D',
     });
     
-    let existingPosts = {};
-    response.data.values.forEach((row, index) => {
-        if (row[2]) {
-            const match = row[2].match(/\/(video|photo)\/(\d+)/);
-            if (match) existingPosts[match[2]] = index + 1; 
+    let existingPostsByProfile = {};
+response.data.values.forEach((row, index) => {
+    const profile = row[1];
+    const link = row[2];
+    if (profile && link) {
+        const match = link.match(/\/(video|photo)\/(\d+)/);
+        if (match) {
+            if (!existingPostsByProfile[profile]) {
+                existingPostsByProfile[profile] = {};
+            }
+            existingPostsByProfile[profile][match[2]] = index + 1;
         }
-    });
+    }
+});
+
     
     while (profiles.length > 0) {
         const profile = profiles.shift();
@@ -609,7 +774,20 @@ async function processProfiles() {
             }
         });
     
-        await scrapeProfile(page, profile, profileDateRanges[profile], existingPosts);
+        const cleanProfile = profile.replace(/\/$/, '');
+        const lastKnownLink = lastKnownLinks[cleanProfile] || null;
+
+
+        await scrapeProfile(
+            page,
+            profile,
+            profileDateRanges[profile],
+            existingPostsByProfile[profile] || {},
+            lastKnownLink,
+            profile.includes('@inprintwetrust')
+        );
+
+          
         await page.close();
         await browser.close(); // ✅ properly close each browser here
     }

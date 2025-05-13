@@ -593,10 +593,16 @@ const viewsData = await page.evaluate(() => {
       return { href, views };
     });
   });
+
+  // Filter out invalid hrefs (profile links, nulls, etc.)
+const filteredViewsData = viewsData.filter(
+    d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/'))
+  );
+  
   
   // ⬇️ Match post IDs to Google Sheets rows and queue updates
-  for (let { href, views } of viewsData) {
-    const postIdMatch = href?.match(/\/(video|photo)\/(\d+)/);
+  for (let { href, views } of filteredViewsData) {
+    const postIdMatch = href.match(/\/(video|photo)\/(\d+)/);
     const postId = postIdMatch?.[2];
     if (!postId || !views) continue;
   
@@ -605,7 +611,7 @@ const viewsData = await page.evaluate(() => {
   
     console.log(`✅ Found view count: ${views} for post ${href}`);
     updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
-  }
+  }  
   
 
     const scrapedPosts = await scrollPage(page, profileDateRange, existingPosts);

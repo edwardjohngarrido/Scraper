@@ -312,366 +312,155 @@ for (const link of postLinks) {
 
 async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint, sheets) {
     const BRAND_TAGS = [
-        '@In Print We Trust',
-        '@in print we trust',
-        '@InPrintWeTrust',
-        '@inprintwetrust',
-        '@inprintwetrust.co',
-        '@InPrintWeTrust.co',
-        '#InPrintWeTrust',
-        '#inprintwetrust',
-        '#IPWT',
-        '#ipwt'
-      ];
-      
-      let collectedLinks = [];
-      console.log(`📍 Starting scrape for profile: ${profileUrl}`);
-      console.log(`🧠 lastKnownLink passed: ${lastKnownLink}`);
-
-      
+      '@In Print We Trust',
+      '@in print we trust',
+      '@InPrintWeTrust',
+      '@inprintwetrust',
+      '@inprintwetrust.co',
+      '@InPrintWeTrust.co',
+      '#InPrintWeTrust',
+      '#inprintwetrust',
+      '#IPWT',
+      '#ipwt'
+    ];
+  
+    console.log(`📍 Starting scrape for profile: ${profileUrl}`);
+    console.log(`🧠 lastKnownLink passed: ${lastKnownLink}`);
+  
+    // Initial load and deleted profile check
+    try {
       await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      
-      let seenPostLinks = new Set();
-      let reachedLastKnownPost = false;
-      
-      // ✅ Find the first non-pinned video by skipping elements that contain the pinned badge
-      const thumbnails = await page.$$('a[href*="/video/"]');
-      let clicked = false;
-      
-      for (const thumb of thumbnails) {
-          const badge = await thumb.$('div[data-e2e="video-card-badge"]');
-          if (!badge) {
-              await thumb.click(); // 👈 Open viewer with actual click
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              clicked = true;
-              break;
-          }
+      await new Promise(resolve => setTimeout(resolve, 3000));
+  
+      const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
+      const fallbackText = await page.$eval('body', el => el.innerText).catch(() => '');
+      if (isDeletedProfile || fallbackText.includes("Couldn't find this account")) {
+        console.log("❌ Detected deleted account. Skipping...");
+        return;
       }
-      
-      if (!clicked) {
-        console.log('⚠️ No non-pinned videos found to start viewer.');
+    } catch (err) {
+      console.log(`❌ Failed to load profile ${profileUrl}: ${err.message}`);
+      return;
+    }
+  
+    // Start viewer-based scrolling to collect new post links
+    let collectedLinks = [];
+    const thumbnails = await page.$$('a[href*="/video/"]');
+    for (const thumb of thumbnails) {
+      const badge = await thumb.$('div[data-e2e="video-card-badge"]');
+      if (!badge) {
+        await thumb.click();
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        break;
+      }
+    }
+  
+    const seenLinks = new Set();
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const currentUrl = page.url().split('?')[0];
+      const isPreviouslySeen = Array.isArray(lastKnownLink)
+        ? lastKnownLink.includes(currentUrl)
+        : currentUrl === lastKnownLink;
+  
+      if (isPreviouslySeen) {
+        console.log(`🛑 Hit one of last known links: ${currentUrl}. Stopping.`);
+        break;
+      }
+  
+      if (seenLinks.has(currentUrl)) {
+        await page.keyboard.press('ArrowDown');
+        continue;
+      }
+      seenLinks.add(currentUrl);
+  
+      const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
+      const postId = postIdMatch ? postIdMatch[2] : null;
+  
+      if (!postId) {
+        console.log(`❌ Invalid post URL (no ID): ${currentUrl}`);
+      } else if (postId in existingPosts) {
+        console.log(`⚠️ Post ID already exists in sheet: ${postId}`);
+      } else {
+        let valid = false;
+        if (isInprint) {
+          valid = true;
+        } else {
+          const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
+          valid = BRAND_TAGS.some(tag => desc.includes(tag));
+        }
+  
+        if (valid) {
+          console.log(`📥 Adding new post: ${currentUrl}`);
+          collectedLinks.push(currentUrl);
+        } else {
+          console.log(`⏭️ Skipping post (no tag match): ${currentUrl}`);
+        }
+      }
+  
+      await page.keyboard.press('ArrowDown');
+    }
+  
+    // ✅ Append links to Sheet1!C
+    if (collectedLinks.length > 0) {
+      const existing = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: 'Sheet1!C:C',
+      });
+  
+      const existingValues = existing.data.values || [];
+      const nextRow = existingValues.length + 1;
+  
+      const values = collectedLinks.map(link => [link]);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `Sheet1!C${nextRow}`,
+        valueInputOption: 'RAW',
+        resource: { values }
+      });
+  
+      console.log(`✅ Appended ${collectedLinks.length} new links to Sheet1!C starting at row ${nextRow}`);
+      console.log("📤 Links appended:", collectedLinks);
     } else {
-        // Only run this loop if a video was clicked
-        let seenLinks = new Set();
-        let newLinks = [];
-        let scrolling = true;
-    
-        while (scrolling) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            const currentUrl = page.url().split('?')[0];
-            const isPreviouslySeen = Array.isArray(lastKnownLink)
-                ? lastKnownLink.includes(currentUrl)
-                : currentUrl === lastKnownLink;
-    
-            if (isPreviouslySeen) {
-                console.log(`🛑 Hit one of last known links: ${currentUrl}. Stopping.`);
-                break;
-            }
-    
-            if (!seenLinks.has(currentUrl)) {
-                seenLinks.add(currentUrl);
-    
-                const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
-                const postId = postIdMatch ? postIdMatch[2] : null;
-    
-                if (!postId) {
-                    console.log(`❌ Invalid post URL (no ID): ${currentUrl}`);
-                } else if (postId in existingPosts) {
-                    console.log(`⚠️ Post ID already exists in sheet: ${postId}`);
-                } else {
-                    let valid = false;
-    
-                    if (isInprint) {
-                        valid = true;
-                    } else {
-                        const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
-                        valid = BRAND_TAGS.some(tag => desc.includes(tag));
-                    }
-    
-                    if (valid) {
-                        console.log(`📥 Adding new post: ${currentUrl}`);
-                        collectedLinks.push(currentUrl);
-                    } else {
-                        console.log(`⏭️ Skipping post (no tag match): ${currentUrl}`);
-                    }
-                }
-            }
-    
-            await page.keyboard.press('ArrowDown');
-        }
-    
-        console.log("🧪 Collected links ready for writing:", collectedLinks);
+      console.log("ℹ️ No new links to append.");
     }
-          
-
-      
-      let seenLinks = new Set();
-let newLinks = [];
-let scrolling = true;
-
-while (scrolling) {
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const currentUrl = page.url().split('?')[0];
-    const isPreviouslySeen = Array.isArray(lastKnownLink)
-    ? lastKnownLink.includes(currentUrl)
-    : currentUrl === lastKnownLink;
-
-if (isPreviouslySeen) {
-    console.log(`🛑 Hit one of last known links: ${currentUrl}. Stopping.`);
-    break;
-}
-
-
-    if (!seenLinks.has(currentUrl)) {
-        seenLinks.add(currentUrl);
-
-        const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
-        const postId = postIdMatch ? postIdMatch[2] : null;
-
-        if (!postId) {
-            console.log(`❌ Invalid post URL (no ID): ${currentUrl}`);
-        } else if (postId in existingPosts) {
-            console.log(`⚠️ Post ID already exists in sheet: ${postId}`);
-        } else {
-            let valid = false;
-        
-            if (isInprint) {
-                valid = true;
-            } else {
-                const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
-                valid = BRAND_TAGS.some(tag => desc.includes(tag));
-            }
-        
-            if (valid) {
-                console.log(`📥 Adding new post: ${currentUrl}`);
-                collectedLinks.push(currentUrl);
-            } else {
-                console.log(`⏭️ Skipping post (no tag match): ${currentUrl}`);
-            }
-        }
-    }
-
-    await page.keyboard.press('ArrowDown');
-}
-
-console.log("🧪 Collected links ready for writing:", collectedLinks);
-
-
-      // ✅ Append only to the next empty row in Column C
-if (collectedLinks.length > 0) {
-    const sheets = await initSheets();
   
-    // Get current data in column C to find the last non-empty row
-    const existing = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!C:C',
-    });
+    existingPosts = await refreshExistingPosts();
+    console.log(`🔁 Refreshed existingPosts with ${Object.keys(existingPosts).length} links from Sheet1.`);
   
-    const existingValues = existing.data.values || [];
-    const nextRow = existingValues.length + 1;
-  
-    const values = collectedLinks.map(link => [link]); // Single column
-  
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `Sheet1!C${nextRow}`,
-      valueInputOption: 'RAW',
-      resource: {
-        values: values
-      }
-    });
-  
-    console.log(`✅ Successfully appended ${collectedLinks.length} new links to Column C, starting at row ${nextRow}.`);
-    console.log("📤 Links appended:");
-    console.log(collectedLinks);
-  } else {
-    console.log("ℹ️ No new links to append.");
-  }
-
-  existingPosts = await refreshExistingPosts();
-console.log(`🔁 Refreshed existingPosts with ${Object.keys(existingPosts).length} links from Sheet1.`);
-
-  
-
-    
-    console.log(`Navigating to ${profileUrl}`);
-
-    let retryAttempts = 10; // Maximum refresh attempts
-    let captchaWaitTime = 120000; // Max wait time for CAPTCHA solver
-
-    for (let attempt = 1; attempt <= retryAttempts; attempt++) {
-        if (attempt > 1) {
-            console.log(`🔄 Refreshing Profile... Attempt ${attempt}/${retryAttempts}`);
-            try {
-                await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-            } catch (err) {
-                console.log(`❌ Reload failed on attempt ${attempt}:`, err.message);
-                continue; // continue to next attempt
-            }
-            await new Promise(resolve => setTimeout(resolve, 15000));
-        } else {
-            //await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 120000 });
-            try {
-                await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-                // 👇 Check if profile doesn't exist
-                const notFound = await page.$eval('body', el => el.innerText).catch(() => '');
-                if (notFound.includes("Couldn't find this account")) {
-                    console.log("❌ Profile not found (deleted or never existed). Skipping...");
-                    return;
-                }
-
-            } catch (err) {
-                console.error(`❌ Navigation failed for ${profileUrl}:`, err.message);
-                return; // Skip this profile and continue
-            }       
-
-            
-        }
-
-        // ⏳ Short delay before checking (prevents false negatives)
-        await new Promise(resolve => setTimeout(resolve, 15000));
-
-        // 🚨 Step 1: Detect CAPTCHA
-        const captchaSelector = 'div[data-e2e="captcha"], iframe[src*="tiktok.com/captcha"]';
-        const isCaptchaPresent = await page.$(captchaSelector);
-
-        if (isCaptchaPresent) {
-            console.log("⚠️ CAPTCHA detected! Waiting for solver...");
-            let captchaSolved = false;
-            let startTime = Date.now();
-
-            while (Date.now() - startTime < captchaWaitTime) {
-                await new Promise(resolve => setTimeout(resolve, 12000));
-                const stillCaptcha = await page.$(captchaSelector);
-                if (!stillCaptcha) {
-                    captchaSolved = true;
-                    break;
-                }
-            }
-
-            if (captchaSolved) {
-                console.log("✅ CAPTCHA solved! Proceeding...");
-                break;
-            } else {
-                console.log("❌ CAPTCHA not solved in time. Skipping profile.");
-                return;
-            }
-        }
-
-        // 🚨 Step 2: Check if Posts Have Loaded
-        //const videosSectionExists = await page.$('div[data-e2e="user-post-item"]');
-        const videosSectionExists = await page.$('a[href*="/video/"]');
-
-
-        if (videosSectionExists) {
-            console.log("✅ Profile loaded successfully! Posts detected.");
-            break;
-        }
-
-        console.log(`⚠️ No CAPTCHA found, but posts didn't load. Attempt ${attempt}/${retryAttempts}`);
-
-        if (attempt === retryAttempts) {
-            console.log("❌ Profile did not load after multiple attempts. Skipping...");
-            return;
-        }
-    }
-
+    // Grid scraping for view counts
     console.log("⏳ Waiting 5s for posts to fully load...");
     await new Promise(resolve => setTimeout(resolve, 5000));
-
-    console.log("📜 Starting scrolling for posts...");
-
-    // ⬇️ New logic: bulk scrape all visible post views from grid
-const viewsData = await page.evaluate(() => {
-    const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
-    return posts.map(post => {
-      const href = post.getAttribute('href')?.split('?')[0];
-      const viewEl = post.querySelector('strong[data-e2e="video-views"]');
-      const views = viewEl?.innerText || null;
-      return { href, views };
+  
+    const viewsData = await page.evaluate(() => {
+      const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+      return posts.map(post => {
+        const href = post.getAttribute('href')?.split('?')[0];
+        const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+        const views = viewEl?.innerText || null;
+        return { href, views };
+      });
     });
-  });
-
-  // Filter out invalid hrefs (profile links, nulls, etc.)
-const filteredViewsData = viewsData.filter(
-    d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/'))
-  );
   
+    const filteredViewsData = viewsData.filter(
+      d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/'))
+    );
   
-  // ⬇️ Match post IDs to Google Sheets rows and queue updates
-  for (let { href, views } of filteredViewsData) {
-    const postIdMatch = href.match(/\/(video|photo)\/(\d+)/);
-    const postId = postIdMatch?.[2];
-    if (!postId || !views) continue;
+    for (let { href, views } of filteredViewsData) {
+      const postIdMatch = href.match(/\/(video|photo)\/(\d+)/);
+      const postId = postIdMatch?.[2];
+      if (!postId || !views) continue;
   
-    const rowNumber = existingPosts[postId];
-    if (!rowNumber) continue;
+      const rowNumber = existingPosts[postId];
+      if (!rowNumber) continue;
   
-    console.log(`✅ Found view count: ${views} for post ${href}`);
-    updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
-  }  
+      console.log(`✅ Found view count: ${views} for post ${href}`);
+      updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+    }
   
-
-    const scrapedPosts = await scrollPage(page, profileDateRange, existingPosts);
-
-    
-    // for (let post of scrapedPosts) {
-    //     // ✅ **Only process posts that are in Google Sheets**
-    //     // if (!(post in existingPosts)) {
-    //     //     console.log(`⚠️ Skipping post not found in Google Sheets: ${post}`);
-    //     //     continue;
-    //     // }
-
-    //     const scrapedPostIdMatch = post.match(/\/(video|photo)\/(\d+)/);
-    //     if (!scrapedPostIdMatch) continue;
-    //     const scrapedPostId = scrapedPostIdMatch[2];
-
-
-    //     try {
-    //         //const viewsSelector = `a[href='${post}'] strong[data-e2e="video-views"]`;
-    //         const viewsData = await page.evaluate(() => {
-    //             const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
-    //             return posts.map(post => {
-    //               const href = post.getAttribute('href')?.split('?')[0];
-    //               const viewEl = post.querySelector('strong[data-e2e="video-views"]');
-    //               const views = viewEl?.innerText || null;
-    //               return { href, views };
-    //             });
-    //           });
-              
-    //         console.log(`👁️ Attempting to get views for: ${post} | selector: ${viewsSelector}`);
-    //         console.log(`🔍 Scraped post: ${post} | Views: ${views}`);
-
-    //         //const rowNumber = existingPosts[post];
-    //         const rowNumber = existingPosts[scrapedPostId];
-    //         if (!rowNumber) {
-    //             console.log(`⚠️ Skipping update — ${scrapedPostId} not found in existingPosts.`);
-    //             continue;
-    //         }
-
-
-    //         // ✅ Ensure the row number is valid before updating
-    //         if (!rowNumber || isNaN(rowNumber)) {
-    //             console.log(`⚠️ Skipping update for ${post}, invalid row number: ${rowNumber}`);
-    //             continue;
-    //         }
-
-    //         updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
-    //         console.log(`✅ Added to update queue: ${post} -> Row ${rowNumber} | Views: ${views}`);
-    //     } catch (error) {
-    //         console.log(`⚠️ Failed to extract views for post: ${post}`);
-    //     }
-    // }
-
-    // ✅ Call update function after processing each profile
     await updateGoogleSheets();
-
-    console.log("📤 Links appended:");
-    console.log(collectedLinks);
-
-}
+  }
+  
 
 async function refreshExistingPosts() {
     const sheets = await initSheets();

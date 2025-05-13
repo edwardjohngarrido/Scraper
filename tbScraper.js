@@ -201,7 +201,7 @@ async function randomDelay(min, max) {
     await new Promise(resolve => setTimeout(resolve, delay));
 }
 
-async function scrollPage(page, profileDateRange) {
+async function scrollPage(page, profileDateRange, existingPosts) {
     let lastHeight = await page.evaluate(() => document.body.scrollHeight);
     let stopScrolling = false;
     let allLoadedPosts = new Set();
@@ -227,39 +227,45 @@ while (!stopScrolling || (allLoadedPosts.size === 0 && scrollCount < maxScrolls)
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', posts => posts.map(post => post.href));
+    console.log("🧩 Visible post links on profile grid:");
+postLinks.forEach(link => {
+  const cleaned = link.split('?')[0];
+  const postId = cleaned.match(/\/(video|photo)\/(\d+)/)?.[2];
+  const postDate = convertPostIdToDate(postId);
+  console.log(`🔗 ${cleaned} | ID: ${postId} | Date: ${postDate?.toISOString?.() ?? 'invalid'}`);
+});
+
     let newPostsFound = false;
     let allOutOfRange = true;
 
-    for (const link of postLinks) {
-        const postId = extractPostId(link);
-        if (postId && !allLoadedPosts.has(link)) {
-            const postDate = convertPostIdToDate(postId);
-            console.log(`🔍 Post found: ${link} | Date: ${postDate.toUTCString()}`);
+    let tooOldCount = 0;
+    const cutoffDate = new Date();
+    cutoffDate.setMonth(cutoffDate.getMonth() - 2);
 
-            if (!isNaN(postDate.getTime())) {
-                if (postDate < cutoffDate) {
-                    tooOldCount++;
-                    console.log(`⏭️ Skipping post (too old): ${postDate.toUTCString()} (${link})`);
+for (const link of postLinks) {
+    const cleanedLink = link.split('?')[0];
+    const postId = extractPostId(cleanedLink);
+    
+    if (!postId) continue;
 
-                    if (tooOldCount >= 3) {
-                        console.log("🛑 Hit 3 consecutive too-old posts. Stopping scroll.");
-                        stopScrolling = true;
-                        break;
-                    }
-                    continue;
-                }
+    const postDate = convertPostIdToDate(postId);
+    if (!postDate || isNaN(postDate.getTime())) continue;
 
-                tooOldCount = 0; // reset if we find a valid one
-                allLoadedPosts.add(link);
-                allLoadedPostTimestamps.add(postDate);
-
-                if (postDate >= profileDateRange.minDate && postDate <= profileDateRange.maxDate) {
-                    newPostsFound = true;
-                    allOutOfRange = false;
-                }
-            }
+    if (postDate < cutoffDate) {
+        tooOldCount++;
+        console.log(`⏳ Too old: ${cleanedLink} (${postDate.toISOString()})`);
+        if (tooOldCount >= 3) {
+            console.log("🛑 Stopping scroll — 3 consecutive posts were too old.");
+            stopScrolling = true;
+            break;
         }
+    } else {
+        tooOldCount = 0;
+        allLoadedPosts.add(cleanedLink);
+        allLoadedPostTimestamps.add(postDate);
     }
+}
+
 
     if (stopScrolling) break;
 
@@ -304,7 +310,7 @@ while (!stopScrolling || (allLoadedPosts.size === 0 && scrollCount < maxScrolls)
     return allLoadedPosts;
 }
 
-async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint) {
+async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint, sheets) {
     const BRAND_TAGS = [
         '@In Print We Trust',
         '@in print we trust',
@@ -344,9 +350,60 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
       }
       
       if (!clicked) {
-          console.log('⚠️ No non-pinned videos found to start viewer.');
-          return;
-      }      
+        console.log('⚠️ No non-pinned videos found to start viewer.');
+    } else {
+        // Only run this loop if a video was clicked
+        let seenLinks = new Set();
+        let newLinks = [];
+        let scrolling = true;
+    
+        while (scrolling) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const currentUrl = page.url().split('?')[0];
+            const isPreviouslySeen = Array.isArray(lastKnownLink)
+                ? lastKnownLink.includes(currentUrl)
+                : currentUrl === lastKnownLink;
+    
+            if (isPreviouslySeen) {
+                console.log(`🛑 Hit one of last known links: ${currentUrl}. Stopping.`);
+                break;
+            }
+    
+            if (!seenLinks.has(currentUrl)) {
+                seenLinks.add(currentUrl);
+    
+                const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
+                const postId = postIdMatch ? postIdMatch[2] : null;
+    
+                if (!postId) {
+                    console.log(`❌ Invalid post URL (no ID): ${currentUrl}`);
+                } else if (postId in existingPosts) {
+                    console.log(`⚠️ Post ID already exists in sheet: ${postId}`);
+                } else {
+                    let valid = false;
+    
+                    if (isInprint) {
+                        valid = true;
+                    } else {
+                        const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
+                        valid = BRAND_TAGS.some(tag => desc.includes(tag));
+                    }
+    
+                    if (valid) {
+                        console.log(`📥 Adding new post: ${currentUrl}`);
+                        collectedLinks.push(currentUrl);
+                    } else {
+                        console.log(`⏭️ Skipping post (no tag match): ${currentUrl}`);
+                    }
+                }
+            }
+    
+            await page.keyboard.press('ArrowDown');
+        }
+    
+        console.log("🧪 Collected links ready for writing:", collectedLinks);
+    }
+          
 
       
       let seenLinks = new Set();
@@ -431,6 +488,10 @@ if (collectedLinks.length > 0) {
   } else {
     console.log("ℹ️ No new links to append.");
   }
+
+  existingPosts = await refreshExistingPosts();
+console.log(`🔁 Refreshed existingPosts with ${Object.keys(existingPosts).length} links from Sheet1.`);
+
   
 
     
@@ -521,45 +582,110 @@ if (collectedLinks.length > 0) {
     await new Promise(resolve => setTimeout(resolve, 5000));
 
     console.log("📜 Starting scrolling for posts...");
-    const scrapedPosts = await scrollPage(page, profileDateRange);
 
-    for (let post of scrapedPosts) {
-        // ✅ **Only process posts that are in Google Sheets**
-        // if (!(post in existingPosts)) {
-        //     console.log(`⚠️ Skipping post not found in Google Sheets: ${post}`);
-        //     continue;
-        // }
+    // ⬇️ New logic: bulk scrape all visible post views from grid
+const viewsData = await page.evaluate(() => {
+    const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+    return posts.map(post => {
+      const href = post.getAttribute('href')?.split('?')[0];
+      const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+      const views = viewEl?.innerText || null;
+      return { href, views };
+    });
+  });
+  
+  // ⬇️ Match post IDs to Google Sheets rows and queue updates
+  for (let { href, views } of viewsData) {
+    const postIdMatch = href?.match(/\/(video|photo)\/(\d+)/);
+    const postId = postIdMatch?.[2];
+    if (!postId || !views) continue;
+  
+    const rowNumber = existingPosts[postId];
+    if (!rowNumber) continue;
+  
+    console.log(`✅ Found view count: ${views} for post ${href}`);
+    updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+  }
+  
 
-        const scrapedPostIdMatch = post.match(/\/(video|photo)\/(\d+)/);
-        if (!scrapedPostIdMatch) continue;
-        const scrapedPostId = scrapedPostIdMatch[2];
+    const scrapedPosts = await scrollPage(page, profileDateRange, existingPosts);
+
+    
+    // for (let post of scrapedPosts) {
+    //     // ✅ **Only process posts that are in Google Sheets**
+    //     // if (!(post in existingPosts)) {
+    //     //     console.log(`⚠️ Skipping post not found in Google Sheets: ${post}`);
+    //     //     continue;
+    //     // }
+
+    //     const scrapedPostIdMatch = post.match(/\/(video|photo)\/(\d+)/);
+    //     if (!scrapedPostIdMatch) continue;
+    //     const scrapedPostId = scrapedPostIdMatch[2];
 
 
-        try {
-            //const viewsSelector = `a[href='${post}'] strong[data-e2e="video-views"]`;
-            const viewsSelector = `a[href*='${scrapedPostId}'] strong[data-e2e="video-views"]`;
-            const views = await page.$eval(viewsSelector, el => el.innerText);
-            console.log(`🔍 Scraped post: ${post} | Views: ${views}`);
+    //     try {
+    //         //const viewsSelector = `a[href='${post}'] strong[data-e2e="video-views"]`;
+    //         const viewsData = await page.evaluate(() => {
+    //             const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+    //             return posts.map(post => {
+    //               const href = post.getAttribute('href')?.split('?')[0];
+    //               const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+    //               const views = viewEl?.innerText || null;
+    //               return { href, views };
+    //             });
+    //           });
+              
+    //         console.log(`👁️ Attempting to get views for: ${post} | selector: ${viewsSelector}`);
+    //         console.log(`🔍 Scraped post: ${post} | Views: ${views}`);
 
-            //const rowNumber = existingPosts[post];
-            const rowNumber = existingPosts[scrapedPostId];
+    //         //const rowNumber = existingPosts[post];
+    //         const rowNumber = existingPosts[scrapedPostId];
+    //         if (!rowNumber) {
+    //             console.log(`⚠️ Skipping update — ${scrapedPostId} not found in existingPosts.`);
+    //             continue;
+    //         }
 
-            // ✅ Ensure the row number is valid before updating
-            if (!rowNumber || isNaN(rowNumber)) {
-                console.log(`⚠️ Skipping update for ${post}, invalid row number: ${rowNumber}`);
-                continue;
-            }
 
-            updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
-            console.log(`✅ Added to update queue: ${post} -> Row ${rowNumber} | Views: ${views}`);
-        } catch (error) {
-            console.log(`⚠️ Failed to extract views for post: ${post}`);
-        }
-    }
+    //         // ✅ Ensure the row number is valid before updating
+    //         if (!rowNumber || isNaN(rowNumber)) {
+    //             console.log(`⚠️ Skipping update for ${post}, invalid row number: ${rowNumber}`);
+    //             continue;
+    //         }
+
+    //         updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+    //         console.log(`✅ Added to update queue: ${post} -> Row ${rowNumber} | Views: ${views}`);
+    //     } catch (error) {
+    //         console.log(`⚠️ Failed to extract views for post: ${post}`);
+    //     }
+    // }
 
     // ✅ Call update function after processing each profile
     await updateGoogleSheets();
+
+    console.log("📤 Links appended:");
+    console.log(collectedLinks);
+
 }
+
+async function refreshExistingPosts() {
+    const sheets = await initSheets();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!A:D',
+    });
+  
+    let result = {};
+    response.data.values.forEach((row, index) => {
+      const link = row[2];
+      if (link) {
+        const match = link.match(/\/(video|photo)\/(\d+)/);
+        if (match) result[match[2]] = index + 1;
+      }
+    });
+  
+    return result;
+  }
+  
 
 async function updateGoogleSheets() {
     if (updateQueue.length === 0) {
@@ -782,10 +908,12 @@ response.data.values.forEach((row, index) => {
             page,
             profile,
             profileDateRanges[profile],
-            existingPostsByProfile[profile] || {},
+            existingPostsByProfile[cleanProfile] || {},
             lastKnownLink,
-            profile.includes('@inprintwetrust')
-        );
+            profile.includes('@inprintwetrust'),
+            sheets // 👈 add this
+          );
+          
 
           
         await page.close();

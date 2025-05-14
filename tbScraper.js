@@ -95,6 +95,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
     return await puppeteer.launch({
         headless: true,
         args
+        protocolTimeout: 120000 // ⬅️ increase timeout to 2 minutes
     });
 }
 
@@ -369,7 +370,12 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
       }
   
       if (seenLinks.has(currentUrl)) {
-        await page.keyboard.press('ArrowDown');
+        try {
+            await page.keyboard.press('ArrowDown');
+        } catch (err) {
+            console.warn(`⚠️ Keyboard press failed: ${err.message}`);
+        }
+
         continue;
       }
       seenLinks.add(currentUrl);
@@ -398,7 +404,12 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
         }
       }
   
-      await page.keyboard.press('ArrowDown');
+        try {
+            await page.keyboard.press('ArrowDown');
+        } catch (err) {
+            console.warn(`⚠️ Keyboard press failed: ${err.message}`);
+        }
+
     }
   
     // ✅ Append links to Sheet1!C

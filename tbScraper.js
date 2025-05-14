@@ -94,7 +94,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
 
     return await puppeteer.launch({
         headless: true,
-        args
+        args,
         protocolTimeout: 120000 // ⬅️ increase timeout to 2 minutes
     });
 }

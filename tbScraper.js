@@ -355,6 +355,13 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
         break;
       }
     }
+    // 🛑 Bail early if viewer never opened
+    const viewerUrl = page.url().split('?')[0];
+    if (!viewerUrl.includes('/video/') && !viewerUrl.includes('/photo/')) {
+        console.warn(`⚠️ No non-pinned videos found to open viewer for ${profileUrl}. Skipping profile.`);
+        return;
+    }
+
   
     const seenLinks = new Set();
     while (true) {

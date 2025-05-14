@@ -350,6 +350,8 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
   cutoffDate.setMonth(cutoffDate.getMonth() - 2);
 
   const seenLinks = new Set();
+  let consecutiveExisting = 0;
+
   while (true) {
     await new Promise(resolve => setTimeout(resolve, 1500));
     const currentUrl = page.url().split('?')[0];
@@ -371,7 +373,13 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
 
     if (postId in existingPosts) {
       console.log(`⚠️ Post already logged: ${postId}`);
+      consecutiveExisting++;
+      if (consecutiveExisting >= 5) {
+        console.log("🛑 Stopping scroll — 5 consecutive posts already exist in Google Sheets.");
+        break;
+      }
     } else {
+      consecutiveExisting = 0;
       const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
       const isTagged = isInprint || BRAND_TAGS.some(tag => desc.includes(tag));
       if (isTagged) {

@@ -371,24 +371,30 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
       break;
     }
 
-    if (postId in existingPosts) {
-      console.log(`⚠️ Post already logged: ${postId}`);
-      consecutiveExisting++;
-      if (consecutiveExisting >= 5) {
-        console.log("🛑 Stopping scroll — 5 consecutive posts already exist in Google Sheets.");
-        break;
-      }
-    } else {
-      consecutiveExisting = 0;
-      const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
-      const isTagged = isInprint || BRAND_TAGS.some(tag => desc.includes(tag));
-      if (isTagged) {
-        console.log(`📥 Collected valid post: ${currentUrl}`);
-        collectedLinks.push(currentUrl);
-      } else {
-        console.log(`⏭️ Skipped (no tag match): ${currentUrl}`);
-      }
-    }
+    let isCollected = false;
+
+if (postId in existingPosts) {
+  console.log(`⚠️ Post already logged: ${postId}`);
+  consecutiveExisting++;
+} else {
+  const desc = await page.$eval('div[data-e2e=\"browse-video-desc\"]', el => el.innerText).catch(() => '');
+  const isTagged = isInprint || BRAND_TAGS.some(tag => desc.includes(tag));
+  if (isTagged) {
+    console.log(`📥 Collected valid post: ${currentUrl}`);
+    collectedLinks.push(currentUrl);
+    isCollected = true;
+    consecutiveExisting = 0;
+  } else {
+    console.log(`⏭️ Skipped (no tag match): ${currentUrl}`);
+    consecutiveExisting++;
+  }
+}
+
+if (consecutiveExisting >= 5) {
+  console.log("🛑 Stopping scroll — 5 consecutive uncollectable posts.");
+  break;
+}
+
 
     try { await page.keyboard.press('ArrowDown'); } catch { break; }
   }

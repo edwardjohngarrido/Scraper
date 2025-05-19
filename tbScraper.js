@@ -875,6 +875,9 @@ response.data.values.forEach((row, index) => {
     }
 
     console.log(`✅ Finished processing all profiles.`);
+    console.log("🛑 Exiting scraper...");
+    process.exit(0);
+
 
     const traffic = await fetchSmartproxyTraffic();
     const estimatedThisRun = 0.81;

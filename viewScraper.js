@@ -49,20 +49,49 @@ function normalizeViews(viewStr) {
 async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter) {
   try {
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(res => setTimeout(res, 5000));
+    await new Promise(res => setTimeout(res, 3000));
 
-    const viewsData = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]')).map(post => {
-        const href = post.href?.split('?')[0];
-        const view = post.querySelector('strong[data-e2e="video-views"]')?.innerText || null;
-        return { href, view };
+    const seen = new Set();
+    const postData = [];
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let scrolls = 0, tooOldCount = 0, maxScrolls = 10;
+
+    while (scrolls++ < maxScrolls) {
+      const newPosts = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'))
+          .map(post => {
+            const href = post.href?.split('?')[0];
+            const view = post.querySelector('strong[data-e2e="video-views"]')?.innerText || null;
+            return { href, view };
+          });
       });
-    });
+
+      let newDataFound = false;
+      for (const { href, view } of newPosts) {
+        const postId = href?.match(/\/(video|photo)\/(\d+)/)?.[2];
+        if (!postId || seen.has(postId)) continue;
+        seen.add(postId);
+
+        const ts = convertPostIdToTimestamp(postId);
+        if (!ts) continue;
+
+        if (ts < cutoff) {
+          tooOldCount++;
+          if (tooOldCount >= 3) break;
+        } else {
+          tooOldCount = 0;
+          newDataFound = true;
+          postData.push({ href, view, postId });
+        }
+      }
+
+      if (!newDataFound) break;
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await new Promise(res => setTimeout(res, 2500));
+    }
 
     const updates = [];
-    for (const { href, view } of viewsData) {
-      const match = href?.match(/\/(video|photo)\/(\d+)/);
-      const postId = match?.[2];
+    for (const { href, view, postId } of postData) {
       const row = postIdToRow[postId];
       const normalized = normalizeViews(view);
       if (postId && normalized !== null && row) {

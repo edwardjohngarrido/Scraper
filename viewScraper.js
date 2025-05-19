@@ -8,6 +8,15 @@ puppeteer.use(StealthPlugin());
 const SHEET_ID = '19DsWqJW09VxMfNojPH9mnGJ4MCQl7m3Ud3LNLkn-Ag4';
 const SHEET_NAME = 'Sheet11';
 
+function convertPostIdToTimestamp(postId) {
+  try {
+    const binaryId = BigInt(postId).toString(2).padStart(64, '0');
+    return parseInt(binaryId.substring(0, 32), 2) * 1000;
+  } catch {
+    return null;
+  }
+}
+
 async function initSheets() {
   const auth = new google.auth.GoogleAuth({
     keyFile: 'credentials.json',

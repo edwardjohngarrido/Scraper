@@ -1,3 +1,5 @@
+// FULL viewScraper.js with your uploaded file's structure + logging added
+
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { google } = require('googleapis');
@@ -55,66 +57,6 @@ function normalizeViews(viewStr) {
   return isNaN(num) ? null : num;
 }
 
-async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter) {
-  try {
-    await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(res => setTimeout(res, 3000));
-
-    const seen = new Set();
-    const postData = [];
-    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    let scrolls = 0, tooOldCount = 0, maxScrolls = 10;
-
-    while (scrolls++ < maxScrolls) {
-      const newPosts = await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'))
-          .map(post => {
-            const href = post.href?.split('?')[0];
-            const view = post.querySelector('strong[data-e2e="video-views"]')?.innerText || null;
-            return { href, view };
-          });
-      });
-
-      let newDataFound = false;
-      for (const { href, view } of newPosts) {
-        const postId = href?.match(/\/(video|photo)\/(\d+)/)?.[2];
-        if (!postId || seen.has(postId)) continue;
-        seen.add(postId);
-
-        const ts = convertPostIdToTimestamp(postId);
-        if (!ts) continue;
-
-        if (ts < cutoff) {
-          tooOldCount++;
-          if (tooOldCount >= 3) break;
-        } else {
-          tooOldCount = 0;
-          newDataFound = true;
-          postData.push({ href, view, postId });
-        }
-      }
-
-      if (!newDataFound) break;
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await new Promise(res => setTimeout(res, 2500));
-    }
-
-    const updates = [];
-    for (const { href, view, postId } of postData) {
-      const row = postIdToRow[postId];
-      const normalized = normalizeViews(view);
-      if (postId && normalized !== null && row) {
-        updates.push({ range: `${SHEET_NAME}!${columnLetter}${row}`, values: [[normalized]] });
-        console.log(`✅ ${href} → ${view} → ${normalized}`);
-      }
-    }
-    return updates;
-  } catch (err) {
-    console.error(`❌ Failed to scrape ${profileUrl}: ${err.message}`);
-    return [];
-  }
-}
-
 function getColumnLetter(index) {
   const A = 'A'.charCodeAt(0);
   let result = '';
@@ -125,23 +67,93 @@ function getColumnLetter(index) {
   return result;
 }
 
+async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter) {
+  try {
+    console.log(`\n🌐 Scraping profile: ${profileUrl}`);
+    await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await new Promise(res => setTimeout(res, 5000));
+
+    const seen = new Set();
+    const collected = [];
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let scrolls = 0;
+    const maxScrolls = 10;
+    let tooOldCount = 0;
+
+    while (scrolls++ < maxScrolls) {
+      const posts = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'))
+          .map(post => {
+            const href = post.getAttribute('href')?.split('?')[0];
+            const view = post.querySelector('strong[data-e2e="video-views"]')?.innerText || null;
+            return { href, view };
+          });
+      });
+
+      console.log(`🔍 Scroll ${scrolls}: Found ${posts.length} posts.`);
+
+      let foundNew = false;
+
+      for (const { href, view } of posts) {
+        const match = href?.match(/\/(video|photo)\/(\d+)/);
+        const postId = match?.[2];
+        if (!postId || seen.has(postId)) continue;
+        seen.add(postId);
+
+        const ts = convertPostIdToTimestamp(postId);
+        if (!ts) continue;
+
+        const postDate = new Date(ts).toISOString();
+        console.log(`   ↪ Found post ${href} | Views: ${view || 'N/A'} | Timestamp: ${postDate}`);
+
+        if (ts < cutoff) {
+          tooOldCount++;
+          if (tooOldCount >= 5) {
+            console.log("🛑 Stopping: 5 consecutive posts older than 7 days.");
+            scrolls = maxScrolls;
+            break;
+          }
+        } else {
+          tooOldCount = 0;
+          foundNew = true;
+          collected.push({ href, view, postId });
+        }
+      }
+
+      if (!foundNew) break;
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await new Promise(res => setTimeout(res, 2500));
+    }
+
+    const updates = [];
+    for (const { href, view, postId } of collected) {
+      const row = postIdToRow[postId];
+      const normalized = normalizeViews(view);
+      if (postId && normalized !== null && row) {
+        updates.push({ range: `${SHEET_NAME}!${columnLetter}${row}`, values: [[normalized]] });
+        console.log(`✅ Row ${row}: ${href} → ${view} → ${normalized}`);
+      }
+    }
+
+    return updates;
+  } catch (err) {
+    console.error(`❌ Failed to scrape ${profileUrl}: ${err.message}`);
+    return [];
+  }
+}
+
 (async () => {
   const sheets = await initSheets();
-
-  // Step 1: Read existing E1
-  const e1Res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!E1`,
-  });
+  const e1Res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET_NAME}!E1` });
 
   let useExistingColumn = false;
   const now = new Date();
-  let currentColumnIndex = 4; // Column E = index 4 (0-based)
+  let currentColumnIndex = 4;
   const currentUtcIso = now.toISOString();
 
   if (e1Res.data.values && e1Res.data.values[0]) {
     const e1 = e1Res.data.values[0][0];
-    const match = e1.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z/);
+    const match = e1.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
     if (match) {
       const parsed = new Date(match[0]);
       const diffMs = Math.abs(now - parsed);
@@ -153,35 +165,31 @@ function getColumnLetter(index) {
   }
 
   if (!useExistingColumn) {
-    // Step 2: Insert new blank column before E
-    // Step 2a: Get sheetId from title
-const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
-const targetSheet = sheetMeta.data.sheets.find(s => s.properties.title === SHEET_NAME);
-if (!targetSheet) throw new Error(`❌ Sheet "${SHEET_NAME}" not found.`);
-const sheetId = targetSheet.properties.sheetId;
+    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+    const targetSheet = sheetMeta.data.sheets.find(s => s.properties.title === SHEET_NAME);
+    if (!targetSheet) throw new Error(`❌ Sheet "${SHEET_NAME}" not found.`);
+    const sheetId = targetSheet.properties.sheetId;
 
-// Step 2b: Insert new blank column before E
-await sheets.spreadsheets.batchUpdate({
-  spreadsheetId: SHEET_ID,
-  requestBody: {
-    requests: [{
-      insertDimension: {
-        range: {
-          sheetId,
-          dimension: 'COLUMNS',
-          startIndex: currentColumnIndex,
-          endIndex: currentColumnIndex + 1,
-        },
-        inheritFromBefore: true
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: 'COLUMNS',
+              startIndex: currentColumnIndex,
+              endIndex: currentColumnIndex + 1,
+            },
+            inheritFromBefore: true
+          }
+        }]
       }
-    }]
-  }
-});
-console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
-
+    });
+    console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
   }
 
-  const columnLetter = getColumnLetter(currentColumnIndex); // Always E unless columns were inserted
+  const columnLetter = getColumnLetter(currentColumnIndex);
   await sheets.spreadsheets.values.update({
     spreadsheetId: SHEET_ID,
     range: `${SHEET_NAME}!${columnLetter}1`,
@@ -189,7 +197,6 @@ console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
     resource: { values: [[`Scraped at UTC: ${currentUtcIso}`]] },
   });
 
-  // Step 3: Pull post list and scrape
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `${SHEET_NAME}!A:Z`,
@@ -201,13 +208,10 @@ console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
   rows.forEach((row, i) => {
     const profileUrl = row[1];
     const postUrl = row[2];
-
     if (!profileUrl || !postUrl) return;
     if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
-
     const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
     if (!postId) return;
-
     if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
     profileToPostRows[profileUrl][postId] = i + 1;
   });
@@ -221,7 +225,6 @@ console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
 
   for (const [profileUrl, postIdToRow] of profiles) {
     const updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
-
     if (updates.length > 0) {
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: SHEET_ID,
@@ -229,16 +232,13 @@ console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
       });
       console.log(`📤 Updated ${updates.length} posts for ${profileUrl}`);
     }
-
     batchCounter++;
     if (batchCounter >= batchThreshold) {
       console.log('♻️ Restarting browser to refresh session...');
       await page.close();
       await browser.close();
-
       browser = await launchBrowser();
       page = await browser.newPage();
-
       batchThreshold = Math.floor(Math.random() * 3) + 4;
       batchCounter = 0;
     }

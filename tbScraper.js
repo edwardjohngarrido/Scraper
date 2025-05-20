@@ -336,67 +336,61 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
     return;
   }
 
-  let collectedLinks = [];
-  const thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
-  if (thumbnails.length === 0) {
-    console.warn(`⚠️ No posts found for ${profileUrl}. Skipping...`);
-    return;
-  }
-
-  await thumbnails[0].click();
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  // Scroll to load all posts from the profile grid
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await new Promise(resolve => setTimeout(resolve, 4000));
 
   const cutoffDate = new Date();
   cutoffDate.setMonth(cutoffDate.getMonth() - 2);
 
-  const seenLinks = new Set();
+  const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', posts =>
+    posts.map(post => post.href.split('?')[0])
+  );
+
+  const collectedLinks = [];
   let consecutiveExisting = 0;
+  const seenLinks = new Set();
 
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const currentUrl = page.url().split('?')[0];
-
-    const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
-    const postId = postIdMatch ? postIdMatch[2] : null;
-    if (!postId || seenLinks.has(postId)) {
-      try { await page.keyboard.press('ArrowDown'); } catch {}
-      continue;
-    }
+  for (const url of postLinks) {
+    const match = url.match(/\/(video|photo)\/(\d+)/);
+    const postId = match?.[2];
+    if (!postId || seenLinks.has(postId)) continue;
     seenLinks.add(postId);
 
     const postDate = convertPostIdToDate(postId);
     if (!postDate || isNaN(postDate.getTime())) continue;
     if (postDate < cutoffDate) {
-      console.log(`⏳ Post ${postId} is older than cutoff (${postDate.toISOString()}). Stopping.`);
-      break;
+      console.log(`⏳ Post ${postId} is older than cutoff (${postDate.toISOString()}). Skipping.`);
+      continue;
     }
 
     let isCollected = false;
+    if (postId in existingPosts) {
+      console.log(`⚠️ Post already logged: ${postId}`);
+      consecutiveExisting++;
+    } else {
+      const desc = await page.evaluate(() => {
+        const descEl = document.querySelector('div[data-e2e="browse-video-desc"]');
+        return descEl ? descEl.innerText : '';
+      });
+      const isTagged = BRAND_TAGS.some(tag => desc.includes(tag));
+      if (isTagged) {
+        console.log(`📥 Collected valid post: ${url}`);
+        collectedLinks.push(url);
+        isCollected = true;
+        consecutiveExisting = 0;
+      } else {
+        console.log(`⏭️ Skipped (no tag match): ${url}`);
+        consecutiveExisting++;
+      }
+    }
 
-if (postId in existingPosts) {
-  console.log(`⚠️ Post already logged: ${postId}`);
-  consecutiveExisting++;
-} else {
-  const desc = await page.$eval('div[data-e2e=\"browse-video-desc\"]', el => el.innerText).catch(() => '');
-  const isTagged = isInprint || BRAND_TAGS.some(tag => desc.includes(tag));
-  if (isTagged) {
-    console.log(`📥 Collected valid post: ${currentUrl}`);
-    collectedLinks.push(currentUrl);
-    isCollected = true;
-    consecutiveExisting = 0;
-  } else {
-    console.log(`⏭️ Skipped (no tag match): ${currentUrl}`);
-    consecutiveExisting++;
-  }
-}
-
-if (consecutiveExisting >= 5) {
-  console.log("🛑 Stopping scroll — 5 consecutive uncollectable posts.");
-  break;
-}
-
-
-    try { await page.keyboard.press('ArrowDown'); } catch { break; }
+    if (consecutiveExisting >= 5) {
+      console.log("🛑 Stopping check — 5 consecutive uncollectable posts.");
+      break;
+    }
   }
 
   if (collectedLinks.length > 0) {
@@ -451,6 +445,215 @@ if (consecutiveExisting >= 5) {
 
   await updateGoogleSheets();
 }
+
+async function processProfiles(page, sheets) {
+  try {
+    console.log("📥 Fetching TikTok profiles from Column U...");
+    const profileRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!U2:U'
+    });
+
+    const allProfiles = (profileRes.data.values || [])
+      .flat()
+      .filter(link =>
+        typeof link === 'string' &&
+        link.includes('tiktok.com') &&
+        link.includes('/@')
+      )
+      .map(link => link.trim().replace(/\/$/, ''));
+
+    if (allProfiles.length === 0) {
+      console.warn("⚠️ No valid TikTok profiles found in Column U. Exiting.");
+      return;
+    }
+
+    console.log(`🔍 Found ${allProfiles.length} TikTok profiles to scrape.`);
+
+    // Load reference data from columns A–D
+    const rawSheetData = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!A:D'
+    });
+
+    const rows = rawSheetData.data.values || [];
+
+    // Build map of last-known post links by normalized TikTok profile URL
+    const lastKnownMap = {};
+    for (const row of rows) {
+      const rawProfile = (row[1] || '').trim().replace(/\/$/, ''); // Column B
+      const postLink = row[2]?.trim();                             // Column C
+      if (!rawProfile || !postLink || !rawProfile.includes('/@')) continue;
+
+      if (!lastKnownMap[rawProfile]) lastKnownMap[rawProfile] = [];
+      lastKnownMap[rawProfile].push(postLink);
+    }
+
+    // Trim each to last 5 post links max
+    for (const key in lastKnownMap) {
+      lastKnownMap[key] = lastKnownMap[key].slice(-5);
+    }
+
+    for (const profileUrl of allProfiles) {
+      const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+      const isInprint = cleanProfile.includes('@inprintwetrust');
+      const recentLinks = lastKnownMap[cleanProfile] || null;
+      const existingPosts = await refreshExistingPosts();
+
+      console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
+      console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
+      await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+    }
+
+    console.log("✅ Finished processing all TikTok profiles.");
+    process.exit(0);
+  } catch (err) {
+    console.error("❌ Error in processProfiles:", err.message);
+    process.exit(1);
+  }
+}
+
+
+// async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint, sheets) {
+//   const BRAND_TAGS = [
+//     '@In Print We Trust', '@in print we trust', '@InPrintWeTrust', '@inprintwetrust',
+//     '@inprintwetrust.co', '@InPrintWeTrust.co', '#InPrintWeTrust', '#inprintwetrust',
+//     '#IPWT', '#ipwt'
+//   ];
+
+//   console.log(`📍 Starting scrape for profile: ${profileUrl}`);
+//   console.log(`🧠 lastKnownLink passed: ${lastKnownLink}`);
+
+//   try {
+//     await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+//     await new Promise(resolve => setTimeout(resolve, 3000));
+
+//     const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
+//     const fallbackText = await page.$eval('body', el => el.innerText).catch(() => '');
+//     if (isDeletedProfile || fallbackText.includes("Couldn't find this account")) {
+//       console.log("❌ Detected deleted account. Skipping...");
+//       return;
+//     }
+//   } catch (err) {
+//     console.log(`❌ Failed to load profile ${profileUrl}: ${err.message}`);
+//     return;
+//   }
+
+//   let collectedLinks = [];
+//   const thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
+//   if (thumbnails.length === 0) {
+//     console.warn(`⚠️ No posts found for ${profileUrl}. Skipping...`);
+//     return;
+//   }
+
+//   await thumbnails[0].click();
+//   await new Promise(resolve => setTimeout(resolve, 3000));
+
+//   const cutoffDate = new Date();
+//   cutoffDate.setMonth(cutoffDate.getMonth() - 2);
+
+//   const seenLinks = new Set();
+//   let consecutiveExisting = 0;
+
+//   while (true) {
+//     await new Promise(resolve => setTimeout(resolve, 1500));
+//     const currentUrl = page.url().split('?')[0];
+
+//     const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
+//     const postId = postIdMatch ? postIdMatch[2] : null;
+//     if (!postId || seenLinks.has(postId)) {
+//       try { await page.keyboard.press('ArrowDown'); } catch {}
+//       continue;
+//     }
+//     seenLinks.add(postId);
+
+//     const postDate = convertPostIdToDate(postId);
+//     if (!postDate || isNaN(postDate.getTime())) continue;
+//     if (postDate < cutoffDate) {
+//       console.log(`⏳ Post ${postId} is older than cutoff (${postDate.toISOString()}). Stopping.`);
+//       break;
+//     }
+
+//     let isCollected = false;
+
+// if (postId in existingPosts) {
+//   console.log(`⚠️ Post already logged: ${postId}`);
+//   consecutiveExisting++;
+// } else {
+//   const desc = await page.$eval('div[data-e2e=\"browse-video-desc\"]', el => el.innerText).catch(() => '');
+//   const isTagged = isInprint || BRAND_TAGS.some(tag => desc.includes(tag));
+//   if (isTagged) {
+//     console.log(`📥 Collected valid post: ${currentUrl}`);
+//     collectedLinks.push(currentUrl);
+//     isCollected = true;
+//     consecutiveExisting = 0;
+//   } else {
+//     console.log(`⏭️ Skipped (no tag match): ${currentUrl}`);
+//     consecutiveExisting++;
+//   }
+// }
+
+// if (consecutiveExisting >= 5) {
+//   console.log("🛑 Stopping scroll — 5 consecutive uncollectable posts.");
+//   break;
+// }
+
+
+//     try { await page.keyboard.press('ArrowDown'); } catch { break; }
+//   }
+
+//   if (collectedLinks.length > 0) {
+//     const existing = await sheets.spreadsheets.values.get({
+//       spreadsheetId: SHEET_ID,
+//       range: 'Sheet1!C:C'
+//     });
+//     const existingValues = existing.data.values || [];
+//     const nextRow = existingValues.length + 1;
+//     const values = collectedLinks.map(link => [link]);
+
+//     await sheets.spreadsheets.values.update({
+//       spreadsheetId: SHEET_ID,
+//       range: `Sheet1!C${nextRow}`,
+//       valueInputOption: 'RAW',
+//       resource: { values }
+//     });
+
+//     console.log(`✅ Appended ${collectedLinks.length} links to Sheet1 starting at row ${nextRow}`);
+//   } else {
+//     console.log("ℹ️ No new links collected.");
+//   }
+
+//   existingPosts = await refreshExistingPosts();
+//   console.log(`🔁 Refreshed existingPosts (${Object.keys(existingPosts).length} total).`);
+
+//   console.log("⏳ Waiting for grid posts to load...");
+//   await new Promise(resolve => setTimeout(resolve, 5000));
+
+//   const viewsData = await page.evaluate(() => {
+//     const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+//     return posts.map(post => {
+//       const href = post.getAttribute('href')?.split('?')[0];
+//       const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+//       const views = viewEl?.innerText || null;
+//       return { href, views };
+//     });
+//   });
+
+//   const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
+//   for (let { href, views } of filteredViewsData) {
+//     const match = href.match(/\/(video|photo)\/(\d+)/);
+//     const postId = match?.[2];
+//     if (!postId || !views) continue;
+
+//     const rowNumber = existingPosts[postId];
+//     if (!rowNumber) continue;
+
+//     console.log(`✅ Updating view count: ${views} for ${href}`);
+//     updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+//   }
+
+//   await updateGoogleSheets();
+// }
 
 // async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint, sheets) {
 //     const BRAND_TAGS = [
@@ -796,109 +999,156 @@ async function getLastKnownLinks() {
     return normalized;
 }
 
-/** Process TikTok Profiles */
-async function processProfiles() {
-    const { profileDateRanges, sortedProfiles } = await getProfileDateRanges();
-    const profiles = [...sortedProfiles]; // prioritized order
-    console.log(`🚀 Processing ${profiles.length} profiles...`);
-
-    const lastKnownLinks = await getLastKnownLinks();
-
-
-    const prioritizedProfiles = new Set(sortedProfiles.slice(0, 10));
-
-    // Load existing post links to match them to correct rows
-    const sheets = await initSheets();
-    const response = await sheets.spreadsheets.values.get({
-        spreadsheetId: SHEET_ID,
-        range: 'Sheet1!A:D',
+async function processProfiles(page, sheets) {
+  try {
+    console.log("📥 Fetching profiles from Column U...");
+    const rangeResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!U2:U'
     });
-    
-    let existingPostsByProfile = {};
-response.data.values.forEach((row, index) => {
-    const profile = row[1];
-    const link = row[2];
-    if (profile && link) {
-        const match = link.match(/\/(video|photo)\/(\d+)/);
-        if (match) {
-            if (!existingPostsByProfile[profile]) {
-                existingPostsByProfile[profile] = {};
-            }
-            existingPostsByProfile[profile][match[2]] = index + 1;
-        }
-    }
-});
 
-    
-    while (profiles.length > 0) {
-        const profile = profiles.shift();
-        console.log(`📌 Processing profile: ${profile}`);
-    
-        const browser = await initBrowser(profile, prioritizedProfiles);
-        const page = await browser.newPage();
-    
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const url = req.url();
-            if (
-                url.includes('analytics') ||
-                url.includes('doubleclick') ||
-                url.includes('facebook.com/tr') ||
-                url.includes('pixel') ||
-                url.includes('ads.tiktok.com')
-            ) {
-                console.log(`🛑 Blocking tracking: ${url}`);
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-    
-        const cleanProfile = profile.replace(/\/$/, '');
-        const lastKnownLink = lastKnownLinks[cleanProfile] || null;
-
-
-        await scrapeProfile(
-            page,
-            profile,
-            profileDateRanges[profile],
-            existingPostsByProfile[cleanProfile] || {},
-            lastKnownLink,
-            profile.includes('@inprintwetrust'),
-            sheets // 👈 add this
-          );
-          
-
-          
-        await page.close();
-        await browser.close(); // ✅ properly close each browser here
+    const profiles = (rangeResponse.data.values || []).flat().filter(Boolean);
+    if (profiles.length === 0) {
+      console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
+      return;
     }
 
-    console.log(`✅ Finished processing all profiles.`);
-    console.log("🛑 Exiting scraper...");
-    process.exit(0);
+    console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
 
+    const lastKnownMap = await getLastKnownLinks();
 
-    const traffic = await fetchSmartproxyTraffic();
-    const estimatedThisRun = 0.81;
+for (const profileUrl of profiles) {
+  const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+  const isInprint = cleanProfile.includes('@inprintwetrust');
+  const recentLinks = lastKnownMap[cleanProfile] || null;
+  const existingPosts = await refreshExistingPosts();
 
-    // Save run log
-    fs.writeFileSync('run_log.json', JSON.stringify({
-      latestUsage: estimatedThisRun,
-      usedGB: traffic.used,
-      trafficLimit: traffic.limit,
-      timestamp: new Date().toISOString()
-    }, null, 2));
-
-    // Append to CSV
-    const csvHeader = 'timestamp,usedGB,trafficLimit,estimatedRunGB\n';
-    const csvLine = `${new Date().toISOString()},${traffic.used},${traffic.limit},${estimatedThisRun}\n`;
-
-    if (!fs.existsSync('traffic_log.csv')) {
-      fs.writeFileSync('traffic_log.csv', csvHeader);
-    }
-    fs.appendFileSync('traffic_log.csv', csvLine);
-
+  console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
+  console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
+  await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
 }
 
-processProfiles().catch(console.error);
+
+    console.log("✅ Finished processing all profiles.");
+    process.exit(0);
+  } catch (err) {
+    console.error("❌ Error in processProfiles:", err.message);
+    process.exit(1);
+  }
+}
+
+
+// /** Process TikTok Profiles */
+// async function processProfiles() {
+//     const { profileDateRanges, sortedProfiles } = await getProfileDateRanges();
+//     const profiles = [...sortedProfiles]; // prioritized order
+//     console.log(`🚀 Processing ${profiles.length} profiles...`);
+
+//     const lastKnownLinks = await getLastKnownLinks();
+
+
+//     const prioritizedProfiles = new Set(sortedProfiles.slice(0, 10));
+
+//     // Load existing post links to match them to correct rows
+//     const sheets = await initSheets();
+//     const response = await sheets.spreadsheets.values.get({
+//         spreadsheetId: SHEET_ID,
+//         range: 'Sheet1!A:D',
+//     });
+    
+//     let existingPostsByProfile = {};
+// response.data.values.forEach((row, index) => {
+//     const profile = row[1];
+//     const link = row[2];
+//     if (profile && link) {
+//         const match = link.match(/\/(video|photo)\/(\d+)/);
+//         if (match) {
+//             if (!existingPostsByProfile[profile]) {
+//                 existingPostsByProfile[profile] = {};
+//             }
+//             existingPostsByProfile[profile][match[2]] = index + 1;
+//         }
+//     }
+// });
+
+    
+//     while (profiles.length > 0) {
+//         const profile = profiles.shift();
+//         console.log(`📌 Processing profile: ${profile}`);
+    
+//         const browser = await initBrowser(profile, prioritizedProfiles);
+//         const page = await browser.newPage();
+    
+//         await page.setRequestInterception(true);
+//         page.on('request', (req) => {
+//             const url = req.url();
+//             if (
+//                 url.includes('analytics') ||
+//                 url.includes('doubleclick') ||
+//                 url.includes('facebook.com/tr') ||
+//                 url.includes('pixel') ||
+//                 url.includes('ads.tiktok.com')
+//             ) {
+//                 console.log(`🛑 Blocking tracking: ${url}`);
+//                 req.abort();
+//             } else {
+//                 req.continue();
+//             }
+//         });
+    
+//         const cleanProfile = profile.replace(/\/$/, '');
+//         const lastKnownLink = lastKnownLinks[cleanProfile] || null;
+
+
+//         await scrapeProfile(
+//             page,
+//             profile,
+//             profileDateRanges[profile],
+//             existingPostsByProfile[cleanProfile] || {},
+//             lastKnownLink,
+//             profile.includes('@inprintwetrust'),
+//             sheets // 👈 add this
+//           );
+          
+
+          
+//         await page.close();
+//         await browser.close(); // ✅ properly close each browser here
+//     }
+
+//     console.log(`✅ Finished processing all profiles.`);
+//     console.log("🛑 Exiting scraper...");
+//     process.exit(0);
+
+
+//     const traffic = await fetchSmartproxyTraffic();
+//     const estimatedThisRun = 0.81;
+
+//     // Save run log
+//     fs.writeFileSync('run_log.json', JSON.stringify({
+//       latestUsage: estimatedThisRun,
+//       usedGB: traffic.used,
+//       trafficLimit: traffic.limit,
+//       timestamp: new Date().toISOString()
+//     }, null, 2));
+
+//     // Append to CSV
+//     const csvHeader = 'timestamp,usedGB,trafficLimit,estimatedRunGB\n';
+//     const csvLine = `${new Date().toISOString()},${traffic.used},${traffic.limit},${estimatedThisRun}\n`;
+
+//     if (!fs.existsSync('traffic_log.csv')) {
+//       fs.writeFileSync('traffic_log.csv', csvHeader);
+//     }
+//     fs.appendFileSync('traffic_log.csv', csvLine);
+
+// }
+
+//processProfiles().catch(console.error);
+
+(async () => {
+  const sheets = await initSheets();
+  const browser = await puppeteer.launch({ headless: true });
+  const page = await browser.newPage();
+  await processProfiles(page, sheets);
+  await browser.close();
+})();

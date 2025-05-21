@@ -77,13 +77,14 @@ async function initBrowser(profileName, prioritizedProfiles) {
         "--disable-infobars",
         "--disable-background-networking",
         "--disable-gpu",
+        '--mute-audio',
         "--window-size=1920,1080",
         "--disable-web-security",
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
         `--user-agent=${getRandomUserAgent()}`,
         `--disable-extensions-except=${extensionPath}`,
-        `--load-extension=${extensionPath}`
+        `--load-extension=${extensionPath}`,
     ];
 
     if (shouldUseProxy) {
@@ -93,7 +94,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
     }
 
     return await puppeteer.launch({
-        headless: true,
+        headless: false,
         args,
         protocolTimeout: 120000 // ⬅️ increase timeout to 2 minutes
     });
@@ -319,10 +320,11 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
   ];
 
   console.log(`📍 Starting scrape for profile: ${profileUrl}`);
-  console.log(`🧠 lastKnownLink passed: ${lastKnownLink}`);
+  console.log(`🧠 lastKnownLink passed: ${lastKnownLink ? lastKnownLink.join(', ') : 'null'}`);
 
   try {
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await dismissInterestModal(page);
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
@@ -336,62 +338,90 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
     return;
   }
 
-  // Scroll to load all posts from the profile grid
-  await page.evaluate(() => window.scrollTo(0, 0));
+  const thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
+  if (thumbnails.length === 0) {
+    console.warn(`⚠️ No video/photo thumbnails found on ${profileUrl}`);
+    return;
+  }
+
+  // After clicking the first thumbnail and dismissing modal
+await thumbnails[0].click();
+await new Promise(resolve => setTimeout(resolve, 3000));
+
+// 🧠 Ensure viewer mode is actually opened (check for /video/ or /photo/ in URL)
+let retryCount = 0;
+while (!page.url().includes('/video/') && !page.url().includes('/photo/') && retryCount < 5) {
+  console.log("⏳ Viewer not open yet. Retrying post click...");
+  await dismissInterestModal(page);
+  await thumbnails[0].click();
   await new Promise(resolve => setTimeout(resolve, 1000));
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await new Promise(resolve => setTimeout(resolve, 4000));
+  retryCount++;
+}
+
+if (!page.url().includes('/video/') && !page.url().includes('/photo/')) {
+  console.warn("⚠️ Viewer still not opened after retry. Will continue but viewer may be stuck.");
+}
+
 
   const cutoffDate = new Date();
   cutoffDate.setMonth(cutoffDate.getMonth() - 2);
 
-  const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', posts =>
-    posts.map(post => post.href.split('?')[0])
-  );
-
-  const collectedLinks = [];
-  let consecutiveExisting = 0;
   const seenLinks = new Set();
+  let collectedLinks = [];
+  let consecutiveExisting = 0;
 
-  for (const url of postLinks) {
-    const match = url.match(/\/(video|photo)\/(\d+)/);
-    const postId = match?.[2];
-    if (!postId || seenLinks.has(postId)) continue;
-    seenLinks.add(postId);
+while (true) {
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  await dismissInterestModal(page);
 
+  const currentUrl = page.url().split('?')[0];
+  const postIdMatch = currentUrl.match(/\/(video|photo)\/(\d+)/);
+  const postId = postIdMatch ? postIdMatch[2] : null;
+
+  if (!postId || seenLinks.has(postId)) {
+    try { await page.keyboard.press('ArrowDown'); } catch {}
+    continue;
+  }
+  seenLinks.add(postId);
+
+  // ✅ Instead of breaking immediately on lastKnownLink, count 5 consecutive matches
+  if (lastKnownLink && lastKnownLink.includes(currentUrl)) {
+    console.log(`⚠️ Post is already in last known links: ${currentUrl}`);
+    consecutiveExisting++;
+  } else {
     const postDate = convertPostIdToDate(postId);
     if (!postDate || isNaN(postDate.getTime())) continue;
-    if (postDate < cutoffDate) {
-      console.log(`⏳ Post ${postId} is older than cutoff (${postDate.toISOString()}). Skipping.`);
-      continue;
-    }
 
     let isCollected = false;
     if (postId in existingPosts) {
       console.log(`⚠️ Post already logged: ${postId}`);
       consecutiveExisting++;
-    } else {
-      const desc = await page.evaluate(() => {
-        const descEl = document.querySelector('div[data-e2e="browse-video-desc"]');
-        return descEl ? descEl.innerText : '';
-      });
-      const isTagged = BRAND_TAGS.some(tag => desc.includes(tag));
+    } else if (postDate >= cutoffDate) {
+      const desc = await page.$eval('div[data-e2e="browse-video-desc"]', el => el.innerText).catch(() => '');
+      const isTagged = isInprint || BRAND_TAGS.some(tag => desc.includes(tag));
       if (isTagged) {
-        console.log(`📥 Collected valid post: ${url}`);
-        collectedLinks.push(url);
+        console.log(`📥 Collected valid post: ${currentUrl}`);
+        collectedLinks.push(currentUrl);
         isCollected = true;
         consecutiveExisting = 0;
       } else {
-        console.log(`⏭️ Skipped (no tag match): ${url}`);
+        console.log(`⏭️ Skipped (no tag match): ${currentUrl}`);
         consecutiveExisting++;
       }
-    }
-
-    if (consecutiveExisting >= 5) {
-      console.log("🛑 Stopping check — 5 consecutive uncollectable posts.");
-      break;
+    } else {
+      console.log(`⏳ Post ${postId} is older than cutoff (${postDate.toISOString()}). Skipping.`);
+      consecutiveExisting++;
     }
   }
+
+  if (consecutiveExisting >= 10) {
+    console.log("🛑 Stopping — 10 consecutive uncollectable or known posts.");
+    break;
+  }
+
+  try { await page.keyboard.press('ArrowDown'); } catch { break; }
+}
+
 
   if (collectedLinks.length > 0) {
     const existing = await sheets.spreadsheets.values.get({
@@ -445,6 +475,7 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
 
   await updateGoogleSheets();
 }
+
 
 async function processProfiles(page, sheets) {
   try {
@@ -1145,10 +1176,40 @@ for (const profileUrl of profiles) {
 
 //processProfiles().catch(console.error);
 
+async function dismissInterestModal(page) {
+  try {
+    const modalVisible = await page.$('[data-e2e="login-modal"]');
+    if (!modalVisible) return;
+
+    const skipped = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const skipBtn = buttons.find(btn =>
+        btn.textContent?.trim().toLowerCase() === 'skip' &&
+        !btn.disabled
+      );
+      if (skipBtn) {
+        skipBtn.click();
+        return true;
+      }
+      return false;
+    });
+
+    if (skipped) {
+      console.log("⚠️ 'Choose your interests' modal dismissed.");
+    } else {
+      console.log("❌ 'Skip' button not found in modal.");
+    }
+  } catch (err) {
+    console.log(`❌ Error dismissing modal: ${err.message}`);
+  }
+}
+
 (async () => {
   const sheets = await initSheets();
-  const browser = await puppeteer.launch({ headless: true });
+  const prioritizedProfiles = new Set();
+  const browser = await initBrowser("bulk_run", prioritizedProfiles); // ✅ fixed
   const page = await browser.newPage();
   await processProfiles(page, sheets);
   await browser.close();
 })();
+

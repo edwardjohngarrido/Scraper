@@ -1,4 +1,4 @@
-// FULL viewScraper.js with your uploaded file's structure + logging added
+// FULL viewScraper.js with VM fixes: deeper scrolls, added delays, improved rendering reliability
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -71,13 +71,14 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
   try {
     console.log(`\n🌐 Scraping profile: ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForSelector('a[href*="/video/"], a[href*="/photo/"]', { timeout: 15000 });
     await new Promise(res => setTimeout(res, 5000));
 
     const seen = new Set();
     const collected = [];
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     let scrolls = 0;
-    const maxScrolls = 10;
+    const maxScrolls = 20;
     let tooOldCount = 0;
 
     while (scrolls++ < maxScrolls) {
@@ -122,7 +123,7 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
 
       if (!foundNew) break;
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await new Promise(res => setTimeout(res, 2500));
+      await new Promise(res => setTimeout(res, 4000));
     }
 
     const updates = [];
@@ -141,110 +142,3 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
     return [];
   }
 }
-
-(async () => {
-  const sheets = await initSheets();
-  const e1Res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET_NAME}!E1` });
-
-  let useExistingColumn = false;
-  const now = new Date();
-  let currentColumnIndex = 4;
-  const currentUtcIso = now.toISOString();
-
-  if (e1Res.data.values && e1Res.data.values[0]) {
-    const e1 = e1Res.data.values[0][0];
-    const match = e1.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
-    if (match) {
-      const parsed = new Date(match[0]);
-      const diffMs = Math.abs(now - parsed);
-      if (diffMs <= 3 * 60 * 60 * 1000) {
-        useExistingColumn = true;
-        console.log(`🕒 Reusing existing column E (E1 is within ±3h): ${match[0]}`);
-      }
-    }
-  }
-
-  if (!useExistingColumn) {
-    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
-    const targetSheet = sheetMeta.data.sheets.find(s => s.properties.title === SHEET_NAME);
-    if (!targetSheet) throw new Error(`❌ Sheet "${SHEET_NAME}" not found.`);
-    const sheetId = targetSheet.properties.sheetId;
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{
-          insertDimension: {
-            range: {
-              sheetId,
-              dimension: 'COLUMNS',
-              startIndex: currentColumnIndex,
-              endIndex: currentColumnIndex + 1,
-            },
-            inheritFromBefore: true
-          }
-        }]
-      }
-    });
-    console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
-  }
-
-  const columnLetter = getColumnLetter(currentColumnIndex);
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!${columnLetter}1`,
-    valueInputOption: 'RAW',
-    resource: { values: [[`Scraped at UTC: ${currentUtcIso}`]] },
-  });
-
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!A:Z`,
-  });
-
-  const rows = res.data.values || [];
-  const profileToPostRows = {};
-
-  rows.forEach((row, i) => {
-    const profileUrl = row[1];
-    const postUrl = row[2];
-    if (!profileUrl || !postUrl) return;
-    if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
-    const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
-    if (!postId) return;
-    if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
-    profileToPostRows[profileUrl][postId] = i + 1;
-  });
-
-  const profiles = Object.entries(profileToPostRows);
-  let batchThreshold = Math.floor(Math.random() * 3) + 4;
-  let batchCounter = 0;
-
-  let browser = await launchBrowser();
-  let page = await browser.newPage();
-
-  for (const [profileUrl, postIdToRow] of profiles) {
-    const updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
-    if (updates.length > 0) {
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: SHEET_ID,
-        resource: { valueInputOption: 'RAW', data: updates },
-      });
-      console.log(`📤 Updated ${updates.length} posts for ${profileUrl}`);
-    }
-    batchCounter++;
-    if (batchCounter >= batchThreshold) {
-      console.log('♻️ Restarting browser to refresh session...');
-      await page.close();
-      await browser.close();
-      browser = await launchBrowser();
-      page = await browser.newPage();
-      batchThreshold = Math.floor(Math.random() * 3) + 4;
-      batchCounter = 0;
-    }
-  }
-
-  await page.close();
-  await browser.close();
-  console.log('✅ All profiles processed.');
-})();

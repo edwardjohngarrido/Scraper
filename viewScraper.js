@@ -96,7 +96,19 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
   try {
     console.log(`\n🌐 Scraping profile: ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    let retries = 0;
+let found = false;
+while (retries < 5 && !found) {
+  try {
     await page.waitForSelector('a[href*="/video/"], a[href*="/photo/"]', { timeout: 15000 });
+    found = true;
+  } catch {
+    retries++;
+    console.warn(`🔁 Retry ${retries}/5: Selector not found yet.`);
+    await new Promise(res => setTimeout(res, 2000));
+  }
+}
+if (!found) throw new Error('Failed to find video/photo posts after 5 retries.');
     await dismissInterestModal(page);
     await new Promise(res => setTimeout(res, 5000));
 

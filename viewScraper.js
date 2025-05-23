@@ -1,14 +1,21 @@
-// FULL viewScraper.js with VM fixes: deeper scrolls, added delays, improved rendering reliability
+// Updated viewScraper.js with improvements from tbScraper.js
+// Proxy logic included but commented out for now
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { google } = require('googleapis');
 const fs = require('fs');
+const path = require('path');
 
 puppeteer.use(StealthPlugin());
 
 const SHEET_ID = '19DsWqJW09VxMfNojPH9mnGJ4MCQl7m3Ud3LNLkn-Ag4';
 const SHEET_NAME = 'Sheet11';
+const CREDENTIALS_PATH = 'credentials.json';
+
+// const SMARTPROXY_AUTH = 'username:password';
+// const SMARTPROXY_HOST = 'gate.smartproxy.com';
+// const SMARTPROXY_PORT = 7000;
 
 function convertPostIdToTimestamp(postId) {
   try {
@@ -21,7 +28,7 @@ function convertPostIdToTimestamp(postId) {
 
 async function initSheets() {
   const auth = new google.auth.GoogleAuth({
-    keyFile: 'credentials.json',
+    keyFile: CREDENTIALS_PATH,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   return google.sheets({ version: 'v4', auth: await auth.getClient() });
@@ -44,6 +51,10 @@ async function launchBrowser() {
     `--user-agent=${getRandomUserAgent()}`,
     '--window-size=1920,1080',
   ];
+
+  // Uncomment below to enable Smartproxy
+  // args.push(`--proxy-server=http://${SMARTPROXY_HOST}:${SMARTPROXY_PORT}`);
+
   return puppeteer.launch({ headless: true, args });
 }
 
@@ -67,11 +78,26 @@ function getColumnLetter(index) {
   return result;
 }
 
+async function dismissInterestModal(page) {
+  try {
+    await page.evaluate(() => {
+      const modal = document.querySelector('[data-e2e="interest-login-modal"]');
+      if (modal) {
+        const closeBtn = modal.querySelector('svg');
+        if (closeBtn) closeBtn.click();
+      }
+    });
+  } catch (e) {
+    console.warn('⚠️ Could not dismiss modal:', e.message);
+  }
+}
+
 async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter) {
   try {
     console.log(`\n🌐 Scraping profile: ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForSelector('a[href*="/video/"], a[href*="/photo/"]', { timeout: 15000 });
+    await dismissInterestModal(page);
     await new Promise(res => setTimeout(res, 5000));
 
     const seen = new Set();
@@ -142,3 +168,125 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
     return [];
   }
 }
+
+
+// 🧠 MAIN EXECUTION
+(async () => {
+  const sheets = await initSheets();
+  const e1Res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET_NAME}!E1` });
+
+  let useExistingColumn = false;
+  const now = new Date();
+  let currentColumnIndex = 4;
+  const currentUtcIso = now.toISOString();
+
+  if (e1Res.data.values && e1Res.data.values[0]) {
+    const e1 = e1Res.data.values[0][0];
+    const match = e1.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
+    if (match) {
+      const parsed = new Date(match[0]);
+      const diffMs = Math.abs(now - parsed);
+      if (diffMs <= 3 * 60 * 60 * 1000) {
+        useExistingColumn = true;
+        console.log(`🕒 Reusing existing column E (E1 is within ±3h): ${match[0]}`);
+      }
+    }
+  }
+
+  if (!useExistingColumn) {
+    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+    const targetSheet = sheetMeta.data.sheets.find(s => s.properties.title === SHEET_NAME);
+    if (!targetSheet) throw new Error(`❌ Sheet "${SHEET_NAME}" not found.`);
+    const sheetId = targetSheet.properties.sheetId;
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: 'COLUMNS',
+              startIndex: currentColumnIndex,
+              endIndex: currentColumnIndex + 1,
+            },
+            inheritFromBefore: true
+          }
+        }]
+      }
+    });
+    console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
+  }
+
+  const columnLetter = getColumnLetter(currentColumnIndex);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET_NAME}!${columnLetter}1`,
+    valueInputOption: 'RAW',
+    resource: { values: [[`Scraped at UTC: ${currentUtcIso}`]] },
+  });
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET_NAME}!A:Z`,
+  });
+
+  const rows = res.data.values || [];
+  const profileToPostRows = {};
+
+  rows.forEach((row, i) => {
+    const profileUrl = row[1];
+    const postUrl = row[2];
+    if (!profileUrl || !postUrl) return;
+    if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
+    const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
+    if (!postId) return;
+    if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
+    profileToPostRows[profileUrl][postId] = i + 1;
+  });
+
+  const profiles = Object.entries(profileToPostRows);
+  let batchThreshold = Math.floor(Math.random() * 3) + 4;
+  let batchCounter = 0;
+
+  let browser = await launchBrowser();
+  let page = await browser.newPage();
+  await page.setViewport({ width: 1200, height: 800 });
+  await page.setJavaScriptEnabled(true);
+
+  for (const [profileUrl, postIdToRow] of profiles) {
+    try {
+      console.log(`🧾 Starting scrape for: ${profileUrl}`);
+      const updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
+
+      if (updates.length > 0) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          resource: { valueInputOption: 'RAW', data: updates },
+        });
+        console.log(`📤 Updated ${updates.length} posts for ${profileUrl}`);
+      } else {
+        console.log(`⚠️ No updates for ${profileUrl}`);
+      }
+    } catch (err) {
+      console.error(`💥 Error during profile scrape: ${profileUrl} → ${err.message}`);
+    }
+
+    batchCounter++;
+    if (batchCounter >= batchThreshold) {
+      console.log('♻️ Restarting browser to refresh session...');
+      await page.close();
+      await browser.close();
+      browser = await launchBrowser();
+      page = await browser.newPage();
+      await page.setViewport({ width: 1200, height: 800 });
+      await page.setJavaScriptEnabled(true);
+      batchThreshold = Math.floor(Math.random() * 3) + 4;
+      batchCounter = 0;
+    }
+  }
+
+  await page.close();
+  await browser.close();
+  console.log('✅ All profiles processed.');
+})();

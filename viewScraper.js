@@ -102,7 +102,7 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
 
     const seen = new Set();
     const collected = [];
-    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000; // 14-day window
     let scrolls = 0;
     const maxScrolls = 20;
     let tooOldCount = 0;
@@ -117,7 +117,7 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
           });
       });
 
-      console.log(`🔍 Scroll ${scrolls}: Found ${posts.length} posts.`);
+      console.log(`🔍 Scroll ${scrolls}: Found ${posts.length} posts (checking last 14 days)...`);
 
       let foundNew = false;
 
@@ -135,8 +135,8 @@ async function scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLette
 
         if (ts < cutoff) {
           tooOldCount++;
-          if (tooOldCount >= 5) {
-            console.log("🛑 Stopping: 5 consecutive posts older than 7 days.");
+          if (tooOldCount >= 15) {
+            console.log("🛑 Stopping: 15 consecutive posts older than 14 days.");
             scrolls = maxScrolls;
             break;
           }

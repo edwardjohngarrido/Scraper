@@ -269,7 +269,25 @@ if (!found) throw new Error('Failed to find video/photo posts after 5 retries.')
   for (const [profileUrl, postIdToRow] of profiles) {
     try {
       console.log(`🧾 Starting scrape for: ${profileUrl}`);
-      const updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
+      let updates = [];
+try {
+  updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
+} catch (err) {
+  console.error(`🔥 Page error for ${profileUrl}: ${err.message}`);
+  try {
+    await page.close();
+  } catch {}
+  try {
+    page = await browser.newPage();
+    await page.setViewport({ width: 1200, height: 800 });
+    await page.setJavaScriptEnabled(true);
+    console.log('🔄 New page created after crash.');
+  } catch (recoveryError) {
+    console.error('🚫 Failed to recover new page:', recoveryError.message);
+  }
+  continue;
+}
+
 
       if (updates.length > 0) {
         await sheets.spreadsheets.values.batchUpdate({

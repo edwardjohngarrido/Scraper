@@ -329,21 +329,38 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
   console.log(`📍 Starting scrape for profile: ${profileUrl}`);
   console.log(`🧠 lastKnownLink passed: ${lastKnownLink ? lastKnownLink.join(', ') : 'null'}`);
 
-  try {
-    await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await dismissInterestModal(page);
-    await new Promise(resolve => setTimeout(resolve, 3000));
+let profileLoaded = false;
+let profileRetries = 0;
+const maxProfileRetries = 3;
 
-    const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
-    const fallbackText = await page.$eval('body', el => el.innerText).catch(() => '');
-    if (isDeletedProfile || fallbackText.includes("Couldn't find this account")) {
-      console.log("❌ Detected deleted account. Skipping...");
-      return;
+while (!profileLoaded && profileRetries < maxProfileRetries) {
+    try {
+        await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await dismissInterestModal(page);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
+        const fallbackText = await page.$eval('body', el => el.innerText).catch(() => '');
+        if (isDeletedProfile || fallbackText.includes("Couldn't find this account")) {
+            console.log("❌ Detected deleted account. Skipping...");
+            return;
+        }
+        profileLoaded = true; // success!
+    } catch (err) {
+        profileRetries++;
+        console.log(`❌ Failed to load profile ${profileUrl} (attempt ${profileRetries}): ${err.message}`);
+        // Optional: hard browser refresh after first retry
+        if (profileRetries < maxProfileRetries) {
+            console.log("🔁 Refreshing browser & retrying...");
+            // Refresh Puppeteer browser instance (optional but recommended)
+            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
     }
-  } catch (err) {
-    console.log(`❌ Failed to load profile ${profileUrl}: ${err.message}`);
+}
+if (!profileLoaded) {
+    console.log(`💀 Giving up on profile ${profileUrl} after ${maxProfileRetries} tries.`);
     return;
-  }
+}
 
 let thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 let retries = 0;

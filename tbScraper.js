@@ -51,7 +51,7 @@ function shouldUseProxyForProfile(profileName, prioritizedProfiles) {
 }
 
 async function initBrowser(profileName, prioritizedProfiles) {
-    const extensionPath = "C:\\Users\\edwar\\Downloads\\TikTok-Captcha-Solver-Chrome-Web-Store";
+    let extensionPath = "C:\\Users\\edwar\\Downloads\\TikTok-Captcha-Solver-Chrome-Web-Store";
     const secondaryPath = "C:\\Users\\edwardjohngarrido\\Desktop\\Scraper\\TikTok-Captcha-Solver-Chrome-Web-Store";
 
     // Switch to secondary if default path doesn't exist
@@ -59,7 +59,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
         console.warn("⚠️ Default extension path not found. Using secondary extension path.");
         extensionPath = secondaryPath;
     }
-    
+
     const traffic = await fetchSmartproxyTraffic();
     const remaining = traffic.limit - traffic.used;
     const estimatedRunUsage = getPreviousRunUsage();

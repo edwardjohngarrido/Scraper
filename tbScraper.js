@@ -340,8 +340,25 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
 
   const thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
   if (thumbnails.length === 0) {
-    console.warn(`⚠️ No video/photo thumbnails found on ${profileUrl}`);
-    return;
+    let retries = 0;
+let thumbnailsLoaded = false;
+
+while (retries < 5 && !thumbnailsLoaded) {
+  try {
+    await page.waitForSelector('a[data-e2e="user-post-item"]', { timeout: 5000 });
+    thumbnailsLoaded = true;
+  } catch (err) {
+    retries++;
+    console.warn(`🔁 Retry ${retries}/5 — Thumbnails not found on ${profileUrl}`);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  }
+}
+
+if (!thumbnailsLoaded) {
+  console.log(`⚠️ Still no thumbnails after 5 retries on ${profileUrl}. Proceeding to views scraping.`);
+  return { links: [], fromCache: false }; // Empty links but continue scraping views
+}
+
   }
 
   // After clicking the first thumbnail and dismissing modal
@@ -353,8 +370,22 @@ let retryCount = 0;
 while (!page.url().includes('/video/') && !page.url().includes('/photo/') && retryCount < 5) {
   console.log("⏳ Viewer not open yet. Retrying post click...");
   await dismissInterestModal(page);
+  let retryCount = 0;
+let viewerOpened = false;
+while (!viewerOpened && retryCount < 10) {
+  console.log("Viewer not open yet. Retrying post click...");
   await thumbnails[0].click();
   await new Promise(resolve => setTimeout(resolve, 1000));
+  viewerOpened = await page.evaluate(() => {
+    return !!document.querySelector('[data-e2e="browse-video-feed"]');
+  });
+  retryCount++;
+}
+if (!viewerOpened) {
+  console.warn("⚠️ Viewer failed to open after 10 tries. Skipping post.");
+  continue;
+}
+
   retryCount++;
 }
 

@@ -394,7 +394,7 @@ let viewerOpened = false;
 while (!viewerOpened && retryCount < 10) {
   console.log("Viewer not open yet. Retrying post click...");
   await thumbnails[0].click();
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await new Promise(resolve => setTimeout(resolve, 3000));
   viewerOpened = await page.evaluate(() => {
     return !!document.querySelector('[data-e2e="browse-video-feed"]');
   });

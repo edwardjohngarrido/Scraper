@@ -338,28 +338,29 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
     return;
   }
 
-  const thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
-  if (thumbnails.length === 0) {
-    let retries = 0;
-let thumbnailsLoaded = false;
+  let thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 
-while (retries < 5 && !thumbnailsLoaded) {
-  try {
-    await page.waitForSelector('a[data-e2e="user-post-item"]', { timeout: 5000 });
-    thumbnailsLoaded = true;
-  } catch (err) {
-    retries++;
-    console.warn(`🔁 Retry ${retries}/5 — Thumbnails not found on ${profileUrl}`);
-    await page.reload({ waitUntil: 'domcontentloaded' });
+if (thumbnails.length === 0) {
+  let retries = 0;
+  let thumbnailsLoaded = false;
+
+  while (retries < 5 && !thumbnailsLoaded) {
+    try {
+      await page.waitForSelector('a[href*="/video/"], a[href*="/photo/"]', { timeout: 5000 });
+      thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
+      thumbnailsLoaded = thumbnails.length > 0;
+    } catch (err) {
+      retries++;
+      console.warn(`🔁 Retry ${retries}/5 — Thumbnails not found on ${profileUrl}`);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+    }
+  }
+
+  if (!thumbnailsLoaded) {
+    console.log(`⚠️ Still no thumbnails after 5 retries on ${profileUrl}. Proceeding to views scraping.`);
+    return { links: [], fromCache: false }; // Fallback — no new post links but still run view scrape
   }
 }
-
-if (!thumbnailsLoaded) {
-  console.log(`⚠️ Still no thumbnails after 5 retries on ${profileUrl}. Proceeding to views scraping.`);
-  return { links: [], fromCache: false }; // Empty links but continue scraping views
-}
-
-  }
 
   // After clicking the first thumbnail and dismissing modal
 await thumbnails[0].click();

@@ -340,19 +340,20 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
 
 let thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 let retries = 0;
+
 while (thumbnails.length === 0 && retries < 5) {
-  console.warn(`🔁 Retry ${retries + 1}/5 — No thumbnails found on ${profileUrl}`);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
   retries++;
+  console.warn(`🔁 Retry ${retries}/5 — No thumbnails found on ${profileUrl}`);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for page content to load
+  thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 }
 
 if (thumbnails.length === 0) {
-  console.log(`⚠️ Still no thumbnails after 5 retries for ${profileUrl}. Proceeding to view scraping.`);
-  // SKIP LINK COLLECTION BUT CONTINUE TO VIEWS
-  return { links: [], fromCache: false };
+  console.log(`⚠️ Still no thumbnails after 5 retries on ${profileUrl}. Proceeding to views scraping.`);
+  return { links: [], fromCache: false, skipLinkScrape: true }; // Do NOT skip — allow views scrape
 }
+
 
 
   // After clicking the first thumbnail and dismissing modal

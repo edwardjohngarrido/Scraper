@@ -103,7 +103,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
     return await puppeteer.launch({
         headless: false,
         args,
-        protocolTimeout: 120000 // ⬅️ increase timeout to 2 minutes
+        protocolTimeout: 300000 // ⬅️ increase timeout to 5 minutes
     });
 }
 
@@ -464,8 +464,8 @@ while (true) {
     }
   }
 
-  if (consecutiveExisting >= 10) {
-    console.log("🛑 Stopping — 10 consecutive uncollectable or known posts.");
+  if (consecutiveExisting >= 20) {
+    console.log("🛑 Stopping — 20 consecutive uncollectable or known posts.");
     break;
   }
 
@@ -583,7 +583,31 @@ async function processProfiles(page, sheets) {
 
       console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
       console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
-      await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+      let scrapeSuccess = false;
+let scrapeAttempts = 0;
+while (!scrapeSuccess && scrapeAttempts < 3) {
+    try {
+        await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+        scrapeSuccess = true;
+    } catch (err) {
+        scrapeAttempts++;
+        console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err.message}`);
+        // If failed, try to reload browser page
+        try {
+            await page.close();
+            page = await browser.newPage();
+        } catch (e) {
+            // Optionally: relaunch the whole browser
+            await browser.close();
+            browser = await initBrowser("bulk_run", prioritizedProfiles);
+            page = await browser.newPage();
+        }
+    }
+}
+if (!scrapeSuccess) {
+    console.error(`💀 Giving up on profile ${cleanProfile} after ${scrapeAttempts} tries.`);
+}
+
     }
 
     console.log("✅ Finished processing all TikTok profiles.");
@@ -787,6 +811,10 @@ async function processProfiles(page, sheets) {
 
     const lastKnownMap = await getLastKnownLinks();
 
+let browser = await initBrowser("bulk_run", prioritizedProfiles);
+let page = await browser.newPage();
+let scrapedCount = 0;
+
 for (const profileUrl of profiles) {
   const cleanProfile = profileUrl.trim().replace(/\/$/, '');
   const isInprint = cleanProfile.includes('@inprintwetrust');
@@ -796,7 +824,21 @@ for (const profileUrl of profiles) {
   console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
   console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
   await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+
+  scrapedCount++;
+  // Refresh browser every 20 profiles to avoid memory leaks/timeouts
+  if (scrapedCount % 20 === 0) {
+    console.log(`🔁 Refreshing browser after ${scrapedCount} profiles...`);
+    try { await page.close(); } catch {}
+    try { await browser.close(); } catch {}
+    browser = await initBrowser("bulk_run", prioritizedProfiles);
+    page = await browser.newPage();
+  }
 }
+
+try { await page.close(); } catch {}
+try { await browser.close(); } catch {}
+
 
 
     console.log("✅ Finished processing all profiles.");

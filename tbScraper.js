@@ -527,7 +527,7 @@ while (true) {
 }
 
 
-async function processProfiles(page, sheets) {
+async function processProfiles(page, sheets, prioritizedProfiles) {
   try {
     console.log("📥 Fetching TikTok profiles from Column U...");
     const profileRes = await sheets.spreadsheets.values.get({
@@ -793,7 +793,7 @@ async function getLastKnownLinks() {
     return normalized;
 }
 
-async function processProfiles(page, sheets) {
+async function processProfiles(page, sheets, prioritizedProfiles) {
   try {
     console.log("📥 Fetching profiles from Column U...");
     const rangeResponse = await sheets.spreadsheets.values.get({
@@ -882,7 +882,7 @@ async function dismissInterestModal(page) {
   const prioritizedProfiles = new Set();
   const browser = await initBrowser("bulk_run", prioritizedProfiles); // ✅ fixed
   const page = await browser.newPage();
-  await processProfiles(page, sheets);
+  await processProfiles(page, sheets, prioritizedProfiles);
   await browser.close();
 })();
 

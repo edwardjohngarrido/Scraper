@@ -1,21 +1,13 @@
-// Updated viewScraper.js with improvements from tbScraper.js
-// Proxy logic included but commented out for now
-
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const path = require('path');
 const { google } = require('googleapis');
 const fs = require('fs');
-const path = require('path');
 
 puppeteer.use(StealthPlugin());
 
 const SHEET_ID = '19DsWqJW09VxMfNojPH9mnGJ4MCQl7m3Ud3LNLkn-Ag4';
 const SHEET_NAME = 'Sheet11';
-const CREDENTIALS_PATH = 'credentials.json';
-
-// const SMARTPROXY_AUTH = 'username:password';
-// const SMARTPROXY_HOST = 'gate.smartproxy.com';
-// const SMARTPROXY_PORT = 7000;
 
 function convertPostIdToTimestamp(postId) {
   try {
@@ -28,7 +20,7 @@ function convertPostIdToTimestamp(postId) {
 
 async function initSheets() {
   const auth = new google.auth.GoogleAuth({
-    keyFile: CREDENTIALS_PATH,
+    keyFile: 'credentials.json',
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   return google.sheets({ version: 'v4', auth: await auth.getClient() });
@@ -44,18 +36,32 @@ function getRandomUserAgent() {
 }
 
 async function launchBrowser() {
+  let extensionPath = "C:\\Users\\edwar\\Downloads\\TikTok-Captcha-Solver-Chrome-Web-Store";
+  const secondaryPath = "C:\\Users\\edwardjohngarrido\\Desktop\\Scraper\\TikTok-Captcha-Solver-Chrome-Web-Store";
+  
+      // Switch to secondary if default path doesn't exist
+      if (!fs.existsSync(extensionPath) && fs.existsSync(secondaryPath)) {
+          console.warn("⚠️ Default extension path not found. Using secondary extension path.");
+          extensionPath = secondaryPath;
+      }
+
   const args = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-blink-features=AutomationControlled',
     `--user-agent=${getRandomUserAgent()}`,
     '--window-size=1920,1080',
+    `--disable-extensions-except=${extensionPath}`,
+    `--load-extension=${extensionPath}`
   ];
 
-  // Uncomment below to enable Smartproxy
-  // args.push(`--proxy-server=http://${SMARTPROXY_HOST}:${SMARTPROXY_PORT}`);
-
-  return puppeteer.launch({ headless: true, args });
+  return puppeteer.launch({
+    headless: false,
+    args,
+    executablePath: puppeteer.executablePath(),
+    ignoreDefaultArgs: ["--disable-extensions"],
+    defaultViewport: null
+  });
 }
 
 function normalizeViews(viewStr) {
@@ -67,6 +73,7 @@ function normalizeViews(viewStr) {
   const num = parseInt(viewStr);
   return isNaN(num) ? null : num;
 }
+
 
 function getColumnLetter(index) {
   const A = 'A'.charCodeAt(0);

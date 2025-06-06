@@ -558,7 +558,7 @@ while (true) {
 }
 
 
-async function processProfiles(page, sheets, prioritizedProfiles) {
+async function processProfiles(page, browser, sheets, prioritizedProfiles) {
   try {
     console.log("📥 Fetching TikTok profiles from Column U...");
     const profileRes = await sheets.spreadsheets.values.get({
@@ -832,7 +832,15 @@ async function processProfiles(page, sheets, prioritizedProfiles) {
       range: 'Sheet1!U2:U'
     });
 
-    const profiles = (rangeResponse.data.values || []).flat().filter(Boolean);
+    const profiles = (rangeResponse.data.values || [])
+  .flat()
+  .filter(link =>
+    typeof link === 'string' &&
+    link.includes('tiktok.com') &&
+    link.includes('/@')
+  )
+  .map(link => link.trim().replace(/\/$/, ''));
+
     if (profiles.length === 0) {
       console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
       return;
@@ -916,7 +924,7 @@ async function dismissInterestModal(page) {
   const prioritizedProfiles = new Set();
   const browser = await initBrowser("bulk_run", prioritizedProfiles); // ✅ fixed
   const page = await browser.newPage();
-  await processProfiles(page, sheets, prioritizedProfiles);
+  await processProfiles(page, browser, sheets, prioritizedProfiles);
   await browser.close();
 })();
 

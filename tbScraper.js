@@ -103,6 +103,8 @@ async function initBrowser(profileName, prioritizedProfiles) {
     return await puppeteer.launch({
         headless: false,
         args,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        executablePath: puppeteer.executablePath(),
         protocolTimeout: 300000 // ⬅️ increase timeout to 5 minutes
     });
 }
@@ -429,9 +431,16 @@ while (true) {
   const postId = postIdMatch ? postIdMatch[2] : null;
 
   if (!postId || seenLinks.has(postId)) {
-    try { await page.keyboard.press('ArrowDown'); } catch {}
-    continue;
+  // Check if Down button exists (visible)
+  const downBtnExists = await page.$('button[aria-label="Scroll down"]');
+  if (!downBtnExists) {
+    console.log("⬇️ Down arrow not present, breaking out of scrape loop.");
+    break;
   }
+  try { await page.keyboard.press('ArrowDown'); } catch {}
+  continue;
+}
+
   seenLinks.add(postId);
 
   // ✅ Instead of breaking immediately on lastKnownLink, count 5 consecutive matches

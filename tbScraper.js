@@ -101,11 +101,11 @@ async function initBrowser(profileName, prioritizedProfiles) {
     }
 
     return await puppeteer.launch({
-        headless: false,
+        headless: true,
         args,
         ignoreDefaultArgs: ["--disable-extensions"],
         executablePath: puppeteer.executablePath(),
-        protocolTimeout: 300000 // ⬅️ increase timeout to 5 minutes
+        protocolTimeout: 300000
     });
 }
 
@@ -188,6 +188,18 @@ async function getProfileDateRanges() {
     return { profileDateRanges, sortedProfiles };
 }
 
+async function isVerificationModalPresent(page) {
+    // Checks for the "Verifying..." modal or spinner
+    return await page.$x("//div[contains(text(), 'Verifying')]")
+        .then(elems => elems.length > 0);
+}
+async function isUnableToVerify(page) {
+    // Checks for the "Unable to verify. Please try again." error
+    return await page.$x("//div[contains(text(), 'Unable to verify')]")
+        .then(elems => elems.length > 0);
+}
+
+
 function convertPostIdToDate(postId) {
     if (!postId) {
         console.log("⚠️ No post ID provided to convertPostIdToDate");
@@ -235,7 +247,7 @@ console.log(`🧹 Skipping posts older than: ${cutoffDate.toUTCString()}`);
 
 while (!stopScrolling || (allLoadedPosts.size === 0 && scrollCount < maxScrolls)) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await randomDelay(3000, 12000);
 
     const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', posts => posts.map(post => post.href));
     console.log("🧩 Visible post links on profile grid:");
@@ -299,9 +311,9 @@ for (const link of postLinks) {
         } else if (emptyScrollCount >= 5) {
             console.log("🔄 Detected scrolling stuck. Resetting scroll position...");
             await page.evaluate(() => window.scrollTo(0, 0));
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await randomDelay(2000, 5000);
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await randomDelay(2000, 5000);
             emptyScrollCount = 0;
         } else {
             console.log('🔄 More posts needed within date range. Continuing scroll...');
@@ -316,7 +328,7 @@ for (const link of postLinks) {
 
 
     console.log('⌛ Final wait for posts to stabilize...');
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await randomDelay(5000, 10000);
 
     return allLoadedPosts;
 }
@@ -339,7 +351,7 @@ while (!profileLoaded && profileRetries < maxProfileRetries) {
     try {
         await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await dismissInterestModal(page);
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await randomDelay(3000, 6000);
         const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
         const fallbackText = await page.$eval('body', el => el.innerText).catch(() => '');
         if (isDeletedProfile || fallbackText.includes("Couldn't find this account")) {
@@ -354,8 +366,13 @@ while (!profileLoaded && profileRetries < maxProfileRetries) {
         if (profileRetries < maxProfileRetries) {
             console.log("🔁 Refreshing browser & retrying...");
             // Refresh Puppeteer browser instance (optional but recommended)
+            if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+              console.log("🛑 Verification or captcha error detected. Halting further retries and waiting...");
+              await randomDelay(30000, 120000);
+              return; // Exit current scraping attempt
+            }
             await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await randomDelay(5000, 10000);
         }
     }
 }
@@ -369,9 +386,14 @@ let retries = 0;
 
 while (thumbnails.length === 0 && retries < 5) {
   retries++;
+  if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+        console.log("🛑 Verification or captcha error detected. Halting further retries and waiting...");
+        await randomDelay(30000, 120000);
+        return;
+    }
   console.warn(`🔁 Retry ${retries}/5 — No thumbnails found on ${profileUrl}`);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await new Promise(resolve => setTimeout(resolve, 5000)); // Wait for page content to load
+  await randomDelay(5000, 10000);
   thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 }
 
@@ -384,7 +406,7 @@ if (thumbnails.length === 0) {
 
   // After clicking the first thumbnail and dismissing modal
 await thumbnails[0].click();
-await new Promise(resolve => setTimeout(resolve, 3000));
+await randomDelay(3000, 6000);
 
 // 🧠 Ensure viewer mode is actually opened (check for /video/ or /photo/ in URL)
 let retryCount = 0;
@@ -396,7 +418,7 @@ let viewerOpened = false;
 while (!viewerOpened && retryCount < 10) {
   console.log("Viewer not open yet. Retrying post click...");
   await thumbnails[0].click();
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  await randomDelay(3000, 12000);
   viewerOpened = await page.evaluate(() => {
     return !!document.querySelector('[data-e2e="browse-video-feed"]');
   });
@@ -423,7 +445,7 @@ if (!page.url().includes('/video/') && !page.url().includes('/photo/')) {
   let consecutiveExisting = 0;
 
 while (true) {
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await randomDelay(3000, 12000);
   await dismissInterestModal(page);
 
   const currentUrl = page.url().split('?')[0];
@@ -507,7 +529,7 @@ while (true) {
   console.log(`🔁 Refreshed existingPosts (${Object.keys(existingPosts).length} total).`);
 
   console.log("⏳ Waiting for grid posts to load...");
-  await new Promise(resolve => setTimeout(resolve, 5000));
+  await randomDelay(3000, 12000);
 
   const viewsData = await page.evaluate(() => {
     const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
@@ -675,7 +697,7 @@ async function updateGoogleSheets() {
         
         // Retry failed updates
         console.log("🔄 Retrying failed updates...");
-        await new Promise(resolve => setTimeout(resolve, 15000)); // Wait before retrying
+        await randomDelay(15000, 30000);
 
         try {
             await sheets.spreadsheets.values.batchUpdate({
@@ -835,6 +857,11 @@ for (const profileUrl of profiles) {
   scrapedCount++;
   // Refresh browser every 20 profiles to avoid memory leaks/timeouts
   if (scrapedCount % 20 === 0) {
+    if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+        console.log("🛑 Verification or captcha error detected after 20 profiles. Waiting to avoid triggering TikTok lockout...");
+        await randomDelay(30000, 120000);
+        // Optionally: return or throw to abort run
+    }
     console.log(`🔁 Refreshing browser after ${scrapedCount} profiles...`);
     try { await page.close(); } catch {}
     try { await browser.close(); } catch {}

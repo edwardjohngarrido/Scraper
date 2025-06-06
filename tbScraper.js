@@ -820,8 +820,6 @@ async function processProfiles(page, sheets, prioritizedProfiles) {
 
     const lastKnownMap = await getLastKnownLinks();
 
-let browser = await initBrowser("bulk_run", prioritizedProfiles);
-let page = await browser.newPage();
 let scrapedCount = 0;
 
 for (const profileUrl of profiles) {

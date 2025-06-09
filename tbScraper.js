@@ -558,96 +558,96 @@ while (true) {
 }
 
 
-async function processProfiles(page, browser, sheets, prioritizedProfiles) {
-  try {
-    console.log("📥 Fetching TikTok profiles from Column U...");
-    const profileRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!U2:U'
-    });
+// async function processProfiles(page, browser, sheets, prioritizedProfiles) {
+//   try {
+//     console.log("📥 Fetching TikTok profiles from Column U...");
+//     const profileRes = await sheets.spreadsheets.values.get({
+//       spreadsheetId: SHEET_ID,
+//       range: 'Sheet1!U2:U'
+//     });
 
-    const allProfiles = (profileRes.data.values || [])
-      .flat()
-      .filter(link =>
-        typeof link === 'string' &&
-        link.includes('tiktok.com') &&
-        link.includes('/@')
-      )
-      .map(link => link.trim().replace(/\/$/, ''));
+//     const allProfiles = (profileRes.data.values || [])
+//       .flat()
+//       .filter(link =>
+//         typeof link === 'string' &&
+//         link.includes('tiktok.com') &&
+//         link.includes('/@')
+//       )
+//       .map(link => link.trim().replace(/\/$/, ''));
 
-    if (allProfiles.length === 0) {
-      console.warn("⚠️ No valid TikTok profiles found in Column U. Exiting.");
-      return;
-    }
+//     if (allProfiles.length === 0) {
+//       console.warn("⚠️ No valid TikTok profiles found in Column U. Exiting.");
+//       return;
+//     }
 
-    console.log(`🔍 Found ${allProfiles.length} TikTok profiles to scrape.`);
+//     console.log(`🔍 Found ${allProfiles.length} TikTok profiles to scrape.`);
 
-    // Load reference data from columns A–D
-    const rawSheetData = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:D'
-    });
+//     // Load reference data from columns A–D
+//     const rawSheetData = await sheets.spreadsheets.values.get({
+//       spreadsheetId: SHEET_ID,
+//       range: 'Sheet1!A:D'
+//     });
 
-    const rows = rawSheetData.data.values || [];
+//     const rows = rawSheetData.data.values || [];
 
-    // Build map of last-known post links by normalized TikTok profile URL
-    const lastKnownMap = {};
-    for (const row of rows) {
-      const rawProfile = (row[1] || '').trim().replace(/\/$/, ''); // Column B
-      const postLink = row[2]?.trim();                             // Column C
-      if (!rawProfile || !postLink || !rawProfile.includes('/@')) continue;
+//     // Build map of last-known post links by normalized TikTok profile URL
+//     const lastKnownMap = {};
+//     for (const row of rows) {
+//       const rawProfile = (row[1] || '').trim().replace(/\/$/, ''); // Column B
+//       const postLink = row[2]?.trim();                             // Column C
+//       if (!rawProfile || !postLink || !rawProfile.includes('/@')) continue;
 
-      if (!lastKnownMap[rawProfile]) lastKnownMap[rawProfile] = [];
-      lastKnownMap[rawProfile].push(postLink);
-    }
+//       if (!lastKnownMap[rawProfile]) lastKnownMap[rawProfile] = [];
+//       lastKnownMap[rawProfile].push(postLink);
+//     }
 
-    // Trim each to last 5 post links max
-    for (const key in lastKnownMap) {
-      lastKnownMap[key] = lastKnownMap[key].slice(-5);
-    }
+//     // Trim each to last 5 post links max
+//     for (const key in lastKnownMap) {
+//       lastKnownMap[key] = lastKnownMap[key].slice(-5);
+//     }
 
-    for (const profileUrl of allProfiles) {
-      const cleanProfile = profileUrl.trim().replace(/\/$/, '');
-      const isInprint = cleanProfile.includes('@inprintwetrust');
-      const recentLinks = lastKnownMap[cleanProfile] || null;
-      const existingPosts = await refreshExistingPosts();
+//     for (const profileUrl of allProfiles) {
+//       const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+//       const isInprint = cleanProfile.includes('@inprintwetrust');
+//       const recentLinks = lastKnownMap[cleanProfile] || null;
+//       const existingPosts = await refreshExistingPosts();
 
-      console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
-      console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
-      let scrapeSuccess = false;
-let scrapeAttempts = 0;
-while (!scrapeSuccess && scrapeAttempts < 3) {
-    try {
-        await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
-        scrapeSuccess = true;
-    } catch (err) {
-        scrapeAttempts++;
-        console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err.message}`);
-        // If failed, try to reload browser page
-        try {
-            await page.close();
-            page = await browser.newPage();
-        } catch (e) {
-            // Optionally: relaunch the whole browser
-            await browser.close();
-            browser = await initBrowser("bulk_run", prioritizedProfiles);
-            page = await browser.newPage();
-        }
-    }
-}
-if (!scrapeSuccess) {
-    console.error(`💀 Giving up on profile ${cleanProfile} after ${scrapeAttempts} tries.`);
-}
+//       console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
+//       console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
+//       let scrapeSuccess = false;
+// let scrapeAttempts = 0;
+// while (!scrapeSuccess && scrapeAttempts < 3) {
+//     try {
+//         await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+//         scrapeSuccess = true;
+//     } catch (err) {
+//         scrapeAttempts++;
+//         console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err.message}`);
+//         // If failed, try to reload browser page
+//         try {
+//             await page.close();
+//             page = await browser.newPage();
+//         } catch (e) {
+//             // Optionally: relaunch the whole browser
+//             await browser.close();
+//             browser = await initBrowser("bulk_run", prioritizedProfiles);
+//             page = await browser.newPage();
+//         }
+//     }
+// }
+// if (!scrapeSuccess) {
+//     console.error(`💀 Giving up on profile ${cleanProfile} after ${scrapeAttempts} tries.`);
+// }
 
-    }
+//     }
 
-    console.log("✅ Finished processing all TikTok profiles.");
-    process.exit(0);
-  } catch (err) {
-    console.error("❌ Error in processProfiles:", err.message);
-    process.exit(1);
-  }
-}
+//     console.log("✅ Finished processing all TikTok profiles.");
+//     process.exit(0);
+//   } catch (err) {
+//     console.error("❌ Error in processProfiles:", err.message);
+//     process.exit(1);
+//   }
+// }
 
 async function refreshExistingPosts() {
     const sheets = await initSheets();
@@ -824,13 +824,21 @@ async function getLastKnownLinks() {
     return normalized;
 }
 
-async function processProfiles(page, sheets, prioritizedProfiles) {
-  try {
+async function processProfiles(page, browser, sheets, prioritizedProfiles) {
+  
     console.log("📥 Fetching profiles from Column U...");
     const rangeResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range: 'Sheet1!U2:U'
     });
+
+    console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
+
+if (!rangeResponse.data || !rangeResponse.data.values) {
+    console.error("❌ No values returned from Sheets. Full response:", JSON.stringify(rangeResponse.data, null, 2));
+    process.exit(1);
+}
+
 
     const profiles = (rangeResponse.data.values || [])
   .flat()
@@ -849,46 +857,90 @@ async function processProfiles(page, sheets, prioritizedProfiles) {
     console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
 
     const lastKnownMap = await getLastKnownLinks();
-
+    
 let scrapedCount = 0;
+    let curPage = page;
+    let curBrowser = browser;
 
-for (const profileUrl of profiles) {
-  const cleanProfile = profileUrl.trim().replace(/\/$/, '');
-  const isInprint = cleanProfile.includes('@inprintwetrust');
-  const recentLinks = lastKnownMap[cleanProfile] || null;
-  const existingPosts = await refreshExistingPosts();
+    // Batch-based browser refresh logic
+    let batchThreshold = Math.floor(Math.random() * 3) + 4; // Random batch size 4–6
+    let batchCounter = 0;
 
-  console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
-  console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
-  await scrapeProfile(page, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+    for (const profileUrl of profiles) {
+        // Defensive: always ensure curPage is alive before using it
+        if (!curPage || typeof curPage.$x !== "function") {
+            try { if (curPage) await curPage.close(); } catch (e) {}
+            try { if (curBrowser) await curBrowser.close(); } catch (e) {}
+            curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
+            curPage = await curBrowser.newPage();
+            await curPage.setViewport({ width: 1200, height: 800 });
+            await curPage.setJavaScriptEnabled(true);
+            console.log('♻️ New browser/page created due to invalid page.');
+        }
 
-  scrapedCount++;
-  // Refresh browser every 20 profiles to avoid memory leaks/timeouts
-  if (scrapedCount % 20 === 0) {
-    if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
-        console.log("🛑 Verification or captcha error detected after 20 profiles. Waiting to avoid triggering TikTok lockout...");
-        await randomDelay(30000, 120000);
-        // Optionally: return or throw to abort run
+        const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+        const isInprint = cleanProfile.includes('@inprintwetrust');
+        const recentLinks = lastKnownMap[cleanProfile] || null;
+        const existingPosts = await refreshExistingPosts();
+
+        console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
+        console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
+
+        let scrapeAttempts = 0;
+        let scrapeSuccess = false;
+
+        while (!scrapeSuccess && scrapeAttempts < 3) {
+            try {
+                await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+                scrapeSuccess = true;
+            } catch (err) {
+                scrapeAttempts++;
+                console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err && err.message ? err.message : err}`);
+
+                // Try to recover by just opening a new page
+                try { await curPage.close(); } catch (e) {}
+                try {
+                    curPage = await curBrowser.newPage();
+                    await curPage.setViewport({ width: 1200, height: 800 });
+                    await curPage.setJavaScriptEnabled(true);
+                    console.log('🔄 New page created after scrape error.');
+                } catch (e) {
+                    // Fallback: full browser relaunch if new page can't be made
+                    try { await curBrowser.close(); } catch (e2) {}
+                    curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
+                    curPage = await curBrowser.newPage();
+                    await curPage.setViewport({ width: 1200, height: 800 });
+                    await curPage.setJavaScriptEnabled(true);
+                    console.log('♻️ Full browser relaunch after newPage recovery failed.');
+                }
+            }
+        }
+
+        if (!scrapeSuccess) {
+            console.error(`💀 Giving up on profile ${cleanProfile} after ${scrapeAttempts} tries.`);
+        }
+
+        scrapedCount++;
+        batchCounter++;
+
+        // Batch-based browser refresh (like in viewScraper)
+        if (batchCounter >= batchThreshold) {
+            console.log('♻️ Restarting browser to refresh session...');
+            try { await curPage.close(); } catch (e) {}
+            try { await curBrowser.close(); } catch (e) {}
+            curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
+            curPage = await curBrowser.newPage();
+            await curPage.setViewport({ width: 1200, height: 800 });
+            await curPage.setJavaScriptEnabled(true);
+            batchThreshold = Math.floor(Math.random() * 3) + 4;
+            batchCounter = 0;
+        }
     }
-    console.log(`🔁 Refreshing browser after ${scrapedCount} profiles...`);
-    try { await page.close(); } catch {}
-    try { await browser.close(); } catch {}
-    browser = await initBrowser("bulk_run", prioritizedProfiles);
-    page = await browser.newPage();
-  }
-}
 
-try { await page.close(); } catch {}
-try { await browser.close(); } catch {}
-
-
-
-    console.log("✅ Finished processing all profiles.");
-    process.exit(0);
-  } catch (err) {
-    console.error("❌ Error in processProfiles:", err.message);
-    process.exit(1);
-  }
+    // Cleanup after all profiles
+    try { await curPage.close(); } catch (e) {}
+    try { await curBrowser.close(); } catch (e) {}
+    console.log('✅ Finished processing all profiles.');
 }
 
 async function dismissInterestModal(page) {

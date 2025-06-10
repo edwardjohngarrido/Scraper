@@ -242,7 +242,7 @@ if (!found) throw new Error('Failed to find video/photo posts after 5 retries.')
     spreadsheetId: SHEET_ID,
     range: `${SHEET_NAME}!${columnLetter}1`,
     valueInputOption: 'RAW',
-    resource: { values: [[`Scraped at UTC: ${currentUtcIso}`]] },
+    resource: { values: [[`${currentUtcIso}`]] },
   });
 
   const res = await sheets.spreadsheets.values.get({

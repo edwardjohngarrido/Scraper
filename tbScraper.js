@@ -119,6 +119,16 @@ function getRandomUserAgent() {
     return userAgents[Math.floor(Math.random() * userAgents.length)];
 }
 
+function splitArrayIntoChunks(array, numChunks) {
+    const result = [];
+    const chunkSize = Math.ceil(array.length / numChunks);
+    for (let i = 0; i < numChunks; i++) {
+        result.push(array.slice(i * chunkSize, (i + 1) * chunkSize));
+    }
+    return result;
+}
+
+
 /** Initialize Google Sheets API */
 async function initSheets() {
     const auth = new google.auth.GoogleAuth({
@@ -824,43 +834,43 @@ async function getLastKnownLinks() {
     return normalized;
 }
 
-async function processProfiles(page, browser, sheets, prioritizedProfiles) {
+async function processProfilesChunk(profiles, sheets, prioritizedProfiles, workerId) {
   
-    console.log("📥 Fetching profiles from Column U...");
-    const rangeResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!U2:U'
-    });
+    // console.log("📥 Fetching profiles from Column U...");
+//     const rangeResponse = await sheets.spreadsheets.values.get({
+//       spreadsheetId: SHEET_ID,
+//       range: 'Sheet1!U2:U'
+//     });
 
-    console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
+//     console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
 
-if (!rangeResponse.data || !rangeResponse.data.values) {
-    console.error("❌ No values returned from Sheets. Full response:", JSON.stringify(rangeResponse.data, null, 2));
-    process.exit(1);
-}
+// if (!rangeResponse.data || !rangeResponse.data.values) {
+//     console.error("❌ No values returned from Sheets. Full response:", JSON.stringify(rangeResponse.data, null, 2));
+//     process.exit(1);
+// }
 
 
-    const profiles = (rangeResponse.data.values || [])
-  .flat()
-  .filter(link =>
-    typeof link === 'string' &&
-    link.includes('tiktok.com') &&
-    link.includes('/@')
-  )
-  .map(link => link.trim().replace(/\/$/, ''));
+//     const profiles = (rangeResponse.data.values || [])
+//   .flat()
+//   .filter(link =>
+//     typeof link === 'string' &&
+//     link.includes('tiktok.com') &&
+//     link.includes('/@')
+//   )
+//   .map(link => link.trim().replace(/\/$/, ''));
 
-    if (profiles.length === 0) {
-      console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
-      return;
-    }
+//     if (profiles.length === 0) {
+//       console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
+//       return;
+//     }
 
-    console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
+//     console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
 
     const lastKnownMap = await getLastKnownLinks();
     
-let scrapedCount = 0;
-    let curPage = page;
-    let curBrowser = browser;
+    let scrapedCount = 0;
+    let curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
+    let curPage = await curBrowser.newPage();
 
     // Batch-based browser refresh logic
     let batchThreshold = Math.floor(Math.random() * 3) + 4; // Random batch size 4–6
@@ -883,7 +893,7 @@ let scrapedCount = 0;
         const recentLinks = lastKnownMap[cleanProfile] || null;
         const existingPosts = await refreshExistingPosts();
 
-        console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
+        console.log(`[BOT${workerId}] 📍 Starting scrape for profile: ${cleanProfile}`);
         console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
 
         let scrapeAttempts = 0;
@@ -940,7 +950,7 @@ let scrapedCount = 0;
     // Cleanup after all profiles
     try { await curPage.close(); } catch (e) {}
     try { await curBrowser.close(); } catch (e) {}
-    console.log('✅ Finished processing all profiles.');
+    console.log(`[BOT${workerId}] ✅ Finished processing all profiles.`);
 }
 
 async function dismissInterestModal(page) {
@@ -972,11 +982,42 @@ async function dismissInterestModal(page) {
 }
 
 (async () => {
-  const sheets = await initSheets();
-  const prioritizedProfiles = new Set();
-  const browser = await initBrowser("bulk_run", prioritizedProfiles); // ✅ fixed
-  const page = await browser.newPage();
-  await processProfiles(page, browser, sheets, prioritizedProfiles);
-  await browser.close();
-})();
+    const sheets = await initSheets();
+    const prioritizedProfiles = new Set();
 
+    // 1. Fetch all profiles as before
+    const rangeResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: 'Sheet1!U2:U'
+    });
+
+    if (!rangeResponse.data || !rangeResponse.data.values) {
+        console.error("❌ No values returned from Sheets.");
+        process.exit(1);
+    }
+
+    const allProfiles = (rangeResponse.data.values || [])
+        .flat()
+        .filter(link =>
+            typeof link === 'string' &&
+            link.includes('tiktok.com') &&
+            link.includes('/@')
+        )
+        .map(link => link.trim().replace(/\/$/, ''));
+
+    if (allProfiles.length === 0) {
+        console.warn("⚠️ No TikTok profile URLs found. Exiting.");
+        return;
+    }
+
+    // 2. Split into 3 chunks
+    const numBots = 3;
+    const chunks = splitArrayIntoChunks(allProfiles, numBots);
+
+    // 3. Run all bots in parallel
+    await Promise.all(
+        chunks.map((chunk, idx) => processProfilesChunk(chunk, sheets, prioritizedProfiles, idx + 1))
+    );
+
+    console.log("✅ All bots finished scraping!");
+})();

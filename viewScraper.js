@@ -56,7 +56,7 @@ async function launchBrowser() {
   ];
 
   return puppeteer.launch({
-    headless: false,
+    headless: true,
     args,
     executablePath: puppeteer.executablePath(),
     ignoreDefaultArgs: ["--disable-extensions"],

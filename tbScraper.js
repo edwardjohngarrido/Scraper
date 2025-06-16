@@ -1,9 +1,11 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { google } = require('googleapis');
-const fs = require('fs');
 const axios = require('axios');
 const fetch = require('node-fetch');
+const os = require('os');
+const path = require('path');
+const fs = require('fs-extra');
 
 puppeteer.use(StealthPlugin());
 
@@ -102,9 +104,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
         console.log(`🔀 Selected Proxy: ${randomProxy}`);
     }
 
-    const os = require('os');
-const path = require('path');
-const fs = require('fs-extra');
+
 
 const userDataRoot = 'D:\\puppeteer_profiles';
 if (!fs.existsSync(userDataRoot)) fs.mkdirSync(userDataRoot, { recursive: true });

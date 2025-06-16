@@ -364,17 +364,15 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
     '#IPWT', '#ipwt'
   ];
 
-  //console.log(`📍 Starting scrape for profile: ${profileUrl}`);
-  //console.log(`🧠 lastKnownLink passed: ${lastKnownLink ? lastKnownLink.join(', ') : 'null'}`);
-
 let profileLoaded = false;
-let profileRetries = 0;
-const maxProfileRetries = 3;
+    let profileRetries = 0;
+    const maxProfileRetries = 3;
 
-while (!profileLoaded && profileRetries < maxProfileRetries) {
-    try {
-        await page.goto(profileUrl, { waitUntil: 'domcontentloaded'});
-        await new Promise(res => setTimeout(res, 150000));
+    while (!profileLoaded && profileRetries < maxProfileRetries) {
+        try {
+            if (page.isClosed()) throw new Error("Page already closed");
+            await page.goto(profileUrl, { waitUntil: 'domcontentloaded'});
+            await new Promise(res => setTimeout(res, 10000));
         await dismissInterestModal(page);
         await randomDelay(3000, 6000);
         const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
@@ -385,26 +383,22 @@ while (!profileLoaded && profileRetries < maxProfileRetries) {
         }
         profileLoaded = true; // success!
     } catch (err) {
-        profileRetries++;
-        console.log(`❌ Failed to load profile ${profileUrl} (attempt ${profileRetries}): ${err.message}`);
-        // Optional: hard browser refresh after first retry
-        if (profileRetries < maxProfileRetries) {
-            console.log("🔁 Refreshing browser & retrying...");
-            // Refresh Puppeteer browser instance (optional but recommended)
-            if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
-              console.log("🛑 Verification or captcha error detected. Halting further retries and waiting...");
-              await randomDelay(30000, 120000);
-              return; // Exit current scraping attempt
+            profileRetries++;
+            if (err.message && err.message.includes('closed')) {
+                console.log(`⚠️ Page/browser closed unexpectedly. Breaking retry loop for: ${profileUrl}`);
+                break;
             }
-            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-            await randomDelay(5000, 10000);
+            console.log(`❌ Failed to load profile ${profileUrl} (attempt ${profileRetries}): ${err.message}`);
+            if (profileRetries < maxProfileRetries) {
+                await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+                await new Promise(res => setTimeout(res, 5000));
+            }
         }
     }
-}
-if (!profileLoaded) {
-    console.log(`💀 Giving up on profile ${profileUrl} after ${maxProfileRetries} tries.`);
-    return;
-}
+    if (!profileLoaded) {
+        console.log(`💀 Giving up on profile ${profileUrl} after ${maxProfileRetries} tries.`);
+        return;
+    }
 
 let thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 let retries = 0;

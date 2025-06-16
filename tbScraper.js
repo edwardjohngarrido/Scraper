@@ -92,6 +92,8 @@ async function initBrowser(profileName, prioritizedProfiles) {
         `--user-agent=${getRandomUserAgent()}`,
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
+        "--disable-software-rasterizer",
+        "--single-process",
     ];
 
     if (shouldUseProxy) {
@@ -100,13 +102,29 @@ async function initBrowser(profileName, prioritizedProfiles) {
         console.log(`🔀 Selected Proxy: ${randomProxy}`);
     }
 
-    return await puppeteer.launch({
-        headless: true,
-        args,
-        ignoreDefaultArgs: ["--disable-extensions"],
-        executablePath: puppeteer.executablePath(),
-        protocolTimeout: 300000
-    });
+    const os = require('os');
+const path = require('path');
+const fs = require('fs-extra');
+
+const userDataRoot = 'D:\\puppeteer_profiles';
+if (!fs.existsSync(userDataRoot)) fs.mkdirSync(userDataRoot, { recursive: true });
+// Use profileName + random string for uniqueness
+const userDataDir = path.join(userDataRoot, `${profileName}_${Date.now()}_${Math.floor(Math.random()*100000)}`);
+fs.mkdirSync(userDataDir);
+
+const browser = await puppeteer.launch({
+    headless: true,
+    args,
+    ignoreDefaultArgs: ["--disable-extensions"],
+    executablePath: puppeteer.executablePath(),
+    protocolTimeout: 300000,
+    userDataDir
+});
+
+// Attach userDataDir to browser object for later cleanup
+browser._userDataDir = userDataDir;
+return browser;
+
 }
 
 // Function to generate random user agents
@@ -567,98 +585,6 @@ while (true) {
   await updateGoogleSheets();
 }
 
-
-// async function processProfiles(page, browser, sheets, prioritizedProfiles) {
-//   try {
-//     console.log("📥 Fetching TikTok profiles from Column U...");
-//     const profileRes = await sheets.spreadsheets.values.get({
-//       spreadsheetId: SHEET_ID,
-//       range: 'Sheet1!U2:U'
-//     });
-
-//     const allProfiles = (profileRes.data.values || [])
-//       .flat()
-//       .filter(link =>
-//         typeof link === 'string' &&
-//         link.includes('tiktok.com') &&
-//         link.includes('/@')
-//       )
-//       .map(link => link.trim().replace(/\/$/, ''));
-
-//     if (allProfiles.length === 0) {
-//       console.warn("⚠️ No valid TikTok profiles found in Column U. Exiting.");
-//       return;
-//     }
-
-//     console.log(`🔍 Found ${allProfiles.length} TikTok profiles to scrape.`);
-
-//     // Load reference data from columns A–D
-//     const rawSheetData = await sheets.spreadsheets.values.get({
-//       spreadsheetId: SHEET_ID,
-//       range: 'Sheet1!A:D'
-//     });
-
-//     const rows = rawSheetData.data.values || [];
-
-//     // Build map of last-known post links by normalized TikTok profile URL
-//     const lastKnownMap = {};
-//     for (const row of rows) {
-//       const rawProfile = (row[1] || '').trim().replace(/\/$/, ''); // Column B
-//       const postLink = row[2]?.trim();                             // Column C
-//       if (!rawProfile || !postLink || !rawProfile.includes('/@')) continue;
-
-//       if (!lastKnownMap[rawProfile]) lastKnownMap[rawProfile] = [];
-//       lastKnownMap[rawProfile].push(postLink);
-//     }
-
-//     // Trim each to last 5 post links max
-//     for (const key in lastKnownMap) {
-//       lastKnownMap[key] = lastKnownMap[key].slice(-5);
-//     }
-
-//     for (const profileUrl of allProfiles) {
-//       const cleanProfile = profileUrl.trim().replace(/\/$/, '');
-//       const isInprint = cleanProfile.includes('@inprintwetrust');
-//       const recentLinks = lastKnownMap[cleanProfile] || null;
-//       const existingPosts = await refreshExistingPosts();
-
-//       console.log(`\n📍 Starting scrape for profile: ${cleanProfile}`);
-//       console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
-//       let scrapeSuccess = false;
-// let scrapeAttempts = 0;
-// while (!scrapeSuccess && scrapeAttempts < 3) {
-//     try {
-//         await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
-//         scrapeSuccess = true;
-//     } catch (err) {
-//         scrapeAttempts++;
-//         console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err.message}`);
-//         // If failed, try to reload browser page
-//         try {
-//             await page.close();
-//             page = await browser.newPage();
-//         } catch (e) {
-//             // Optionally: relaunch the whole browser
-//             await browser.close();
-//             browser = await initBrowser("bulk_run", prioritizedProfiles);
-//             page = await browser.newPage();
-//         }
-//     }
-// }
-// if (!scrapeSuccess) {
-//     console.error(`💀 Giving up on profile ${cleanProfile} after ${scrapeAttempts} tries.`);
-// }
-
-//     }
-
-//     console.log("✅ Finished processing all TikTok profiles.");
-//     process.exit(0);
-//   } catch (err) {
-//     console.error("❌ Error in processProfiles:", err.message);
-//     process.exit(1);
-//   }
-// }
-
 async function refreshExistingPosts() {
     const sheets = await initSheets();
     const response = await sheets.spreadsheets.values.get({
@@ -835,36 +761,6 @@ async function getLastKnownLinks() {
 }
 
 async function processProfilesChunk(profiles, sheets, prioritizedProfiles, workerId) {
-  
-    // console.log("📥 Fetching profiles from Column U...");
-//     const rangeResponse = await sheets.spreadsheets.values.get({
-//       spreadsheetId: SHEET_ID,
-//       range: 'Sheet1!U2:U'
-//     });
-
-//     console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
-
-// if (!rangeResponse.data || !rangeResponse.data.values) {
-//     console.error("❌ No values returned from Sheets. Full response:", JSON.stringify(rangeResponse.data, null, 2));
-//     process.exit(1);
-// }
-
-
-//     const profiles = (rangeResponse.data.values || [])
-//   .flat()
-//   .filter(link =>
-//     typeof link === 'string' &&
-//     link.includes('tiktok.com') &&
-//     link.includes('/@')
-//   )
-//   .map(link => link.trim().replace(/\/$/, ''));
-
-//     if (profiles.length === 0) {
-//       console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
-//       return;
-//     }
-
-//     console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
 
     const lastKnownMap = await getLastKnownLinks();
     
@@ -916,12 +812,21 @@ async function processProfilesChunk(profiles, sheets, prioritizedProfiles, worke
                     console.log('🔄 New page created after scrape error.');
                 } catch (e) {
                     // Fallback: full browser relaunch if new page can't be made
-                    try { await curBrowser.close(); } catch (e2) {}
-                    curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
-                    curPage = await curBrowser.newPage();
-                    await curPage.setViewport({ width: 1200, height: 800 });
-                    await curPage.setJavaScriptEnabled(true);
-                    console.log('♻️ Full browser relaunch after newPage recovery failed.');
+try { await curBrowser.close(); } catch (e2) {}
+if (curBrowser && curBrowser._userDataDir) {
+    try {
+        require('fs-extra').rmSync(curBrowser._userDataDir, { recursive: true, force: true });
+        console.log(`🧹 Deleted temp profile: ${curBrowser._userDataDir}`);
+    } catch (err) {
+        console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
+    }
+}
+curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
+curPage = await curBrowser.newPage();
+await curPage.setViewport({ width: 1200, height: 800 });
+await curPage.setJavaScriptEnabled(true);
+console.log('♻️ Full browser relaunch after newPage recovery failed.');
+
                 }
             }
         }
@@ -938,6 +843,15 @@ async function processProfilesChunk(profiles, sheets, prioritizedProfiles, worke
             console.log('♻️ Restarting browser to refresh session...');
             try { await curPage.close(); } catch (e) {}
             try { await curBrowser.close(); } catch (e) {}
+            if (curBrowser && curBrowser._userDataDir) {
+    try {
+        require('fs-extra').rmSync(curBrowser._userDataDir, { recursive: true, force: true });
+        console.log(`🧹 Deleted temp profile: ${curBrowser._userDataDir}`);
+    } catch (err) {
+        console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
+    }
+}
+
             curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
             curPage = await curBrowser.newPage();
             await curPage.setViewport({ width: 1200, height: 800 });
@@ -950,6 +864,15 @@ async function processProfilesChunk(profiles, sheets, prioritizedProfiles, worke
     // Cleanup after all profiles
     try { await curPage.close(); } catch (e) {}
     try { await curBrowser.close(); } catch (e) {}
+    if (curBrowser && curBrowser._userDataDir) {
+    try {
+        require('fs-extra').rmSync(curBrowser._userDataDir, { recursive: true, force: true });
+        console.log(`🧹 Deleted temp profile: ${curBrowser._userDataDir}`);
+    } catch (err) {
+        console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
+    }
+}
+
     console.log(`[BOT${workerId}] ✅ Finished processing all profiles.`);
 }
 
@@ -1011,7 +934,7 @@ async function dismissInterestModal(page) {
     }
 
     // 2. Split into 3 chunks
-    const numBots = 3;
+    const numBots = 4;
     const chunks = splitArrayIntoChunks(allProfiles, numBots);
 
     // 3. Run all bots in parallel

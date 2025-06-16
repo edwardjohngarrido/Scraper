@@ -105,7 +105,8 @@ async function initBrowser(profileName, prioritizedProfiles) {
         args,
         ignoreDefaultArgs: ["--disable-extensions"],
         executablePath: puppeteer.executablePath(),
-        protocolTimeout: 300000
+        protocolTimeout: 300000,
+        userDataDir: `D:/puppeteer_profiles/bulk_run_${Date.now()}_${Math.floor(Math.random()*100000)}`
     });
 }
 
@@ -138,65 +139,78 @@ async function initSheets() {
     return google.sheets({ version: 'v4', auth: await auth.getClient() });
 }
 
-async function getProfileDateRanges() {
-    const sheets = await initSheets();
-    const response = await sheets.spreadsheets.values.get({
-        spreadsheetId: SHEET_ID,
-        range: 'Sheet1!A:D',
-    });
-
-    let profileDateRanges = {};
-    let profilePostCounts = {}; // 👈 counts per profile
-
-    response.data.values.slice(1).forEach(row => {
-        const profile = row[1] ? row[1].trim() : null;
-        const postUrl = row[2] ? row[2].trim() : "";
-
-        console.log(`🔗 Checking URL: ${postUrl}`);
-
-        // Extract post ID from video/photo URLs
-        const postIdMatch = postUrl.match(/\/(video|photo)\/(\d+)/);
-        const postId = postIdMatch ? postIdMatch[2] : null;
-
-        if (!postId) {
-            console.log(`⚠️ No valid post ID found in: ${postUrl}`);
-            return;
+function cleanUpTempProfile(browser) {
+    if (browser && browser.process && browser._userDataDir) {
+        const fs = require('fs');
+        try {
+            fs.rmSync(browser._userDataDir, { recursive: true, force: true });
+            console.log(`🧹 Deleted temp profile: ${browser._userDataDir}`);
+        } catch (err) {
+            console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
         }
-
-        const postDate = convertPostIdToDate(postId);
-        console.log(`📅 Extracted Post Date: ${postDate.toUTCString()} (from Post ID: ${postId})`);
-
-        if (!postDate || isNaN(postDate.getTime())) {
-            console.log(`❌ Invalid date detected for post ID: ${postId}, URL: ${postUrl}`);
-            return;
-        }
-
-        // ✅ Count posts per profile
-        if (profile) {
-            profilePostCounts[profile] = (profilePostCounts[profile] || 0) + 1;
-        }
-
-        if (!profileDateRanges[profile]) {
-            profileDateRanges[profile] = {
-                minDate: postDate,
-                maxDate: postDate
-            };
-        } else {
-            profileDateRanges[profile].minDate = postDate < profileDateRanges[profile].minDate ? postDate : profileDateRanges[profile].minDate;
-            profileDateRanges[profile].maxDate = postDate > profileDateRanges[profile].maxDate ? postDate : profileDateRanges[profile].maxDate;
-        }
-
-        console.log(`✅ Profile: ${profile} | minDate: ${profileDateRanges[profile].minDate.toUTCString()} | maxDate: ${profileDateRanges[profile].maxDate.toUTCString()}`);
-    });
-
-    const sortedProfiles = Object.keys(profileDateRanges).sort((a, b) => {
-        const countA = profilePostCounts[a] || 0;
-        const countB = profilePostCounts[b] || 0;
-        return countB - countA;
-    });
-
-    return { profileDateRanges, sortedProfiles };
+    }
 }
+
+
+// async function getProfileDateRanges() {
+//     const sheets = await initSheets();
+//     const response = await sheets.spreadsheets.values.get({
+//         spreadsheetId: SHEET_ID,
+//         range: 'Sheet1!A:D',
+//     });
+
+//     let profileDateRanges = {};
+//     let profilePostCounts = {}; // 👈 counts per profile
+
+//     response.data.values.slice(1).forEach(row => {
+//         const profile = row[1] ? row[1].trim() : null;
+//         const postUrl = row[2] ? row[2].trim() : "";
+
+//         console.log(`🔗 Checking URL: ${postUrl}`);
+
+//         // Extract post ID from video/photo URLs
+//         const postIdMatch = postUrl.match(/\/(video|photo)\/(\d+)/);
+//         const postId = postIdMatch ? postIdMatch[2] : null;
+
+//         if (!postId) {
+//             console.log(`⚠️ No valid post ID found in: ${postUrl}`);
+//             return;
+//         }
+
+//         const postDate = convertPostIdToDate(postId);
+//         console.log(`📅 Extracted Post Date: ${postDate.toUTCString()} (from Post ID: ${postId})`);
+
+//         if (!postDate || isNaN(postDate.getTime())) {
+//             console.log(`❌ Invalid date detected for post ID: ${postId}, URL: ${postUrl}`);
+//             return;
+//         }
+
+//         // ✅ Count posts per profile
+//         if (profile) {
+//             profilePostCounts[profile] = (profilePostCounts[profile] || 0) + 1;
+//         }
+
+//         if (!profileDateRanges[profile]) {
+//             profileDateRanges[profile] = {
+//                 minDate: postDate,
+//                 maxDate: postDate
+//             };
+//         } else {
+//             profileDateRanges[profile].minDate = postDate < profileDateRanges[profile].minDate ? postDate : profileDateRanges[profile].minDate;
+//             profileDateRanges[profile].maxDate = postDate > profileDateRanges[profile].maxDate ? postDate : profileDateRanges[profile].maxDate;
+//         }
+
+//         console.log(`✅ Profile: ${profile} | minDate: ${profileDateRanges[profile].minDate.toUTCString()} | maxDate: ${profileDateRanges[profile].maxDate.toUTCString()}`);
+//     });
+
+//     const sortedProfiles = Object.keys(profileDateRanges).sort((a, b) => {
+//         const countA = profilePostCounts[a] || 0;
+//         const countB = profilePostCounts[b] || 0;
+//         return countB - countA;
+//     });
+
+//     return { profileDateRanges, sortedProfiles };
+// }
 
 async function isVerificationModalPresent(page) {
     // Checks for the "Verifying..." modal or spinner
@@ -817,6 +831,7 @@ while (!scrapeSuccess && scrapeAttempts < 3) {
 // After 3 failed attempts, optionally close and reopen browser for next profile
 if (!scrapeSuccess) {
     try { await curBrowser.close(); } catch (e) {}
+    cleanUpTempProfile(curBrowser);
     curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
     curPage = await curBrowser.newPage();
     await curPage.setViewport({ width: 1200, height: 800 });
@@ -832,6 +847,7 @@ if (!scrapeSuccess) {
             console.log('♻️ Restarting browser to refresh session...');
             try { await curPage.close(); } catch (e) {}
             try { await curBrowser.close(); } catch (e) {}
+            cleanUpTempProfile(curBrowser);
             curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
             curPage = await curBrowser.newPage();
             await curPage.setViewport({ width: 1200, height: 800 });
@@ -844,6 +860,7 @@ if (!scrapeSuccess) {
     // Cleanup after all profiles
     try { await curPage.close(); } catch (e) {}
     try { await curBrowser.close(); } catch (e) {}
+    cleanUpTempProfile(curBrowser);
     console.log(`[BOT${workerId}] ✅ Finished processing all profiles.`);
 }
 

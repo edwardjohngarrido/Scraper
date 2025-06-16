@@ -1,11 +1,9 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { google } = require('googleapis');
+const fs = require('fs');
 const axios = require('axios');
 const fetch = require('node-fetch');
-const os = require('os');
-const path = require('path');
-const fs = require('fs-extra');
 
 puppeteer.use(StealthPlugin());
 
@@ -87,15 +85,13 @@ async function initBrowser(profileName, prioritizedProfiles) {
         "--disable-background-networking",
         "--disable-gpu",
         '--mute-audio',
-        "--window-size=1920,1080",
+        "--window-size=1200,800",
         "--disable-web-security",
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
         `--user-agent=${getRandomUserAgent()}`,
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
-        "--disable-software-rasterizer",
-        "--single-process",
     ];
 
     if (shouldUseProxy) {
@@ -104,27 +100,13 @@ async function initBrowser(profileName, prioritizedProfiles) {
         console.log(`🔀 Selected Proxy: ${randomProxy}`);
     }
 
-
-
-const userDataRoot = 'D:\\puppeteer_profiles';
-if (!fs.existsSync(userDataRoot)) fs.mkdirSync(userDataRoot, { recursive: true });
-// Use profileName + random string for uniqueness
-const userDataDir = path.join(userDataRoot, `${profileName}_${Date.now()}_${Math.floor(Math.random()*100000)}`);
-fs.mkdirSync(userDataDir);
-
-const browser = await puppeteer.launch({
-    headless: true,
-    args,
-    ignoreDefaultArgs: ["--disable-extensions"],
-    executablePath: puppeteer.executablePath(),
-    protocolTimeout: 300000,
-    userDataDir
-});
-
-// Attach userDataDir to browser object for later cleanup
-browser._userDataDir = userDataDir;
-return browser;
-
+    return await puppeteer.launch({
+        headless: true,
+        args,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        executablePath: puppeteer.executablePath(),
+        protocolTimeout: 300000
+    });
 }
 
 // Function to generate random user agents
@@ -368,8 +350,8 @@ async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, 
     '#IPWT', '#ipwt'
   ];
 
-  console.log(`📍 Starting scrape for profile: ${profileUrl}`);
-  console.log(`🧠 lastKnownLink passed: ${lastKnownLink ? lastKnownLink.join(', ') : 'null'}`);
+  //console.log(`📍 Starting scrape for profile: ${profileUrl}`);
+  //console.log(`🧠 lastKnownLink passed: ${lastKnownLink ? lastKnownLink.join(', ') : 'null'}`);
 
 let profileLoaded = false;
 let profileRetries = 0;
@@ -377,7 +359,8 @@ const maxProfileRetries = 3;
 
 while (!profileLoaded && profileRetries < maxProfileRetries) {
     try {
-        await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(profileUrl, { waitUntil: 'domcontentloaded'});
+        await new Promise(res => setTimeout(res, 150000));
         await dismissInterestModal(page);
         await randomDelay(3000, 6000);
         const isDeletedProfile = await page.$('p.css-1y4x9xk-PTitle');
@@ -756,11 +739,41 @@ async function getLastKnownLinks() {
         normalized[profile.replace(/\/$/, '')] = links;
     }
 
-    console.log("🧾 Last known links loaded (top 5):", normalized);
+    //console.log("🧾 Last known links loaded (top 5):", normalized);
     return normalized;
 }
 
 async function processProfilesChunk(profiles, sheets, prioritizedProfiles, workerId) {
+  
+    // console.log("📥 Fetching profiles from Column U...");
+//     const rangeResponse = await sheets.spreadsheets.values.get({
+//       spreadsheetId: SHEET_ID,
+//       range: 'Sheet1!U2:U'
+//     });
+
+//     console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
+
+// if (!rangeResponse.data || !rangeResponse.data.values) {
+//     console.error("❌ No values returned from Sheets. Full response:", JSON.stringify(rangeResponse.data, null, 2));
+//     process.exit(1);
+// }
+
+
+//     const profiles = (rangeResponse.data.values || [])
+//   .flat()
+//   .filter(link =>
+//     typeof link === 'string' &&
+//     link.includes('tiktok.com') &&
+//     link.includes('/@')
+//   )
+//   .map(link => link.trim().replace(/\/$/, ''));
+
+//     if (profiles.length === 0) {
+//       console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
+//       return;
+//     }
+
+//     console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
 
     const lastKnownMap = await getLastKnownLinks();
     
@@ -772,68 +785,44 @@ async function processProfilesChunk(profiles, sheets, prioritizedProfiles, worke
     let batchThreshold = Math.floor(Math.random() * 3) + 4; // Random batch size 4–6
     let batchCounter = 0;
 
-    for (const profileUrl of profiles) {
-        // Defensive: always ensure curPage is alive before using it
-        if (!curPage || typeof curPage.$x !== "function") {
-            try { if (curPage) await curPage.close(); } catch (e) {}
-            try { if (curBrowser) await curBrowser.close(); } catch (e) {}
-            curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
-            curPage = await curBrowser.newPage();
-            await curPage.setViewport({ width: 1200, height: 800 });
-            await curPage.setJavaScriptEnabled(true);
-            console.log('♻️ New browser/page created due to invalid page.');
-        }
+for (const profileUrl of profiles) {
+    const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+    const isInprint = cleanProfile.includes('@inprintwetrust');
+    const recentLinks = lastKnownMap[cleanProfile] || null;
+    const existingPosts = await refreshExistingPosts();
 
-        const cleanProfile = profileUrl.trim().replace(/\/$/, '');
-        const isInprint = cleanProfile.includes('@inprintwetrust');
-        const recentLinks = lastKnownMap[cleanProfile] || null;
-        const existingPosts = await refreshExistingPosts();
+    let scrapeAttempts = 0;
+let scrapeSuccess = false;
 
-        console.log(`[BOT${workerId}] 📍 Starting scrape for profile: ${cleanProfile}`);
-        console.log(`🧠 lastKnownLink passed: ${recentLinks ? recentLinks.join(', ') : 'null'}`);
+while (!scrapeSuccess && scrapeAttempts < 3) {
+    // Always create a fresh page for each attempt!
+    if (curPage && typeof curPage.close === "function") {
+        await new Promise(res => setTimeout(res, 10000)); // 10 seconds
+        try { await curPage.close(); } catch (e) {}
+    }
+    curPage = await curBrowser.newPage();
+    await curPage.setViewport({ width: 1200, height: 800 });
+    await curPage.setJavaScriptEnabled(true);
 
-        let scrapeAttempts = 0;
-        let scrapeSuccess = false;
-
-        while (!scrapeSuccess && scrapeAttempts < 3) {
-            try {
-                await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
-                scrapeSuccess = true;
-            } catch (err) {
-                scrapeAttempts++;
-                console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err && err.message ? err.message : err}`);
-
-                // Try to recover by just opening a new page
-                try { await curPage.close(); } catch (e) {}
-                try {
-                    curPage = await curBrowser.newPage();
-                    await curPage.setViewport({ width: 1200, height: 800 });
-                    await curPage.setJavaScriptEnabled(true);
-                    console.log('🔄 New page created after scrape error.');
-                } catch (e) {
-                    // Fallback: full browser relaunch if new page can't be made
-try { await curBrowser.close(); } catch (e2) {}
-if (curBrowser && curBrowser._userDataDir) {
     try {
-        require('fs-extra').rmSync(curBrowser._userDataDir, { recursive: true, force: true });
-        console.log(`🧹 Deleted temp profile: ${curBrowser._userDataDir}`);
+        await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
+        scrapeSuccess = true;
     } catch (err) {
-        console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
+        scrapeAttempts++;
+        console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err && err.message ? err.message : err}`);
+        await new Promise(res => setTimeout(res, Math.floor(Math.random() * 5000) + 7000)); // Wait 7-12s before retry
     }
 }
-curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
-curPage = await curBrowser.newPage();
-await curPage.setViewport({ width: 1200, height: 800 });
-await curPage.setJavaScriptEnabled(true);
-console.log('♻️ Full browser relaunch after newPage recovery failed.');
 
-                }
-            }
-        }
-
-        if (!scrapeSuccess) {
-            console.error(`💀 Giving up on profile ${cleanProfile} after ${scrapeAttempts} tries.`);
-        }
+// After 3 failed attempts, optionally close and reopen browser for next profile
+if (!scrapeSuccess) {
+    try { await curBrowser.close(); } catch (e) {}
+    curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
+    curPage = await curBrowser.newPage();
+    await curPage.setViewport({ width: 1200, height: 800 });
+    await curPage.setJavaScriptEnabled(true);
+    console.error(`💀 Giving up on profile ${cleanProfile} after 3 tries.`);
+}
 
         scrapedCount++;
         batchCounter++;
@@ -843,15 +832,6 @@ console.log('♻️ Full browser relaunch after newPage recovery failed.');
             console.log('♻️ Restarting browser to refresh session...');
             try { await curPage.close(); } catch (e) {}
             try { await curBrowser.close(); } catch (e) {}
-            if (curBrowser && curBrowser._userDataDir) {
-    try {
-        require('fs-extra').rmSync(curBrowser._userDataDir, { recursive: true, force: true });
-        console.log(`🧹 Deleted temp profile: ${curBrowser._userDataDir}`);
-    } catch (err) {
-        console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
-    }
-}
-
             curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
             curPage = await curBrowser.newPage();
             await curPage.setViewport({ width: 1200, height: 800 });
@@ -864,15 +844,6 @@ console.log('♻️ Full browser relaunch after newPage recovery failed.');
     // Cleanup after all profiles
     try { await curPage.close(); } catch (e) {}
     try { await curBrowser.close(); } catch (e) {}
-    if (curBrowser && curBrowser._userDataDir) {
-    try {
-        require('fs-extra').rmSync(curBrowser._userDataDir, { recursive: true, force: true });
-        console.log(`🧹 Deleted temp profile: ${curBrowser._userDataDir}`);
-    } catch (err) {
-        console.warn(`⚠️ Failed to delete temp profile: ${err.message}`);
-    }
-}
-
     console.log(`[BOT${workerId}] ✅ Finished processing all profiles.`);
 }
 

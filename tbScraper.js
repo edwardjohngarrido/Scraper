@@ -916,7 +916,7 @@ async function dismissInterestModal(page) {
     }
 
     // 2. Split into 3 chunks
-    const numBots = 4;
+    const numBots = 3;
     const chunks = splitArrayIntoChunks(allProfiles, numBots);
 
     // 3. Run all bots in parallel

@@ -7,7 +7,7 @@ const fs = require('fs');
 puppeteer.use(StealthPlugin());
 
 const SHEET_ID = '19DsWqJW09VxMfNojPH9mnGJ4MCQl7m3Ud3LNLkn-Ag4';
-const SHEET_NAME = 'Sheet11';
+const SHEET_NAME = 'General History Matrix';
 
 function convertPostIdToTimestamp(postId) {
   try {
@@ -192,58 +192,7 @@ if (!found) throw new Error('Failed to find video/photo posts after 5 retries.')
 // 🧠 MAIN EXECUTION
 (async () => {
   const sheets = await initSheets();
-  const e1Res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET_NAME}!E1` });
-
-  let useExistingColumn = false;
-  const now = new Date();
-  let currentColumnIndex = 4;
-  const currentUtcIso = now.toISOString();
-
-  if (e1Res.data.values && e1Res.data.values[0]) {
-    const e1 = e1Res.data.values[0][0];
-    const match = e1.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
-    if (match) {
-      const parsed = new Date(match[0]);
-      const diffMs = Math.abs(now - parsed);
-      if (diffMs <= 3 * 60 * 60 * 1000) {
-        useExistingColumn = true;
-        console.log(`🕒 Reusing existing column E (E1 is within ±3h): ${match[0]}`);
-      }
-    }
-  }
-
-  if (!useExistingColumn) {
-    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
-    const targetSheet = sheetMeta.data.sheets.find(s => s.properties.title === SHEET_NAME);
-    if (!targetSheet) throw new Error(`❌ Sheet "${SHEET_NAME}" not found.`);
-    const sheetId = targetSheet.properties.sheetId;
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{
-          insertDimension: {
-            range: {
-              sheetId,
-              dimension: 'COLUMNS',
-              startIndex: currentColumnIndex,
-              endIndex: currentColumnIndex + 1,
-            },
-            inheritFromBefore: true
-          }
-        }]
-      }
-    });
-    console.log(`➕ Inserted new column before E (Sheet ID: ${sheetId})`);
-  }
-
-  const columnLetter = getColumnLetter(currentColumnIndex);
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!${columnLetter}1`,
-    valueInputOption: 'RAW',
-    resource: { values: [[`${currentUtcIso}`]] },
-  });
+  const columnLetter = 'E';
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -253,16 +202,33 @@ if (!found) throw new Error('Failed to find video/photo posts after 5 retries.')
   const rows = res.data.values || [];
   const profileToPostRows = {};
 
-  rows.forEach((row, i) => {
-    const profileUrl = row[1];
-    const postUrl = row[2];
-    if (!profileUrl || !postUrl) return;
-    if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
-    const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
-    if (!postId) return;
-    if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
-    profileToPostRows[profileUrl][postId] = i + 1;
-  });
+const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000; // 14-day window
+
+rows.forEach((row, i) => {
+  const createdAt = row[0]; // Column A
+  const profileUrl = row[1];
+  const postUrl = row[2];
+  const tag = (row[3] || '').trim().toLowerCase();
+
+  if (!createdAt || !profileUrl || !postUrl) return;
+  if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
+  if (tag === 'trailblazer' || tag === 'ipwt') return;
+
+  // Parse MM/DD/YYYY as local date
+  let dateMs = null;
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(createdAt)) {
+    const [month, day, year] = createdAt.split('/').map(Number);
+    dateMs = new Date(year, month - 1, day).getTime(); // JS months are 0-based
+  } else if (!isNaN(Date.parse(createdAt))) {
+    dateMs = new Date(createdAt).getTime();
+  }
+  if (!dateMs || dateMs < cutoff) return;
+
+  const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
+  if (!postId) return;
+  if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
+  profileToPostRows[profileUrl][postId] = i + 1;
+});
 
   const profiles = Object.entries(profileToPostRows);
   let batchThreshold = Math.floor(Math.random() * 3) + 4;
@@ -277,24 +243,21 @@ if (!found) throw new Error('Failed to find video/photo posts after 5 retries.')
     try {
       console.log(`🧾 Starting scrape for: ${profileUrl}`);
       let updates = [];
-try {
-  updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
-} catch (err) {
-  console.error(`🔥 Page error for ${profileUrl}: ${err.message}`);
-  try {
-    await page.close();
-  } catch {}
-  try {
-    page = await browser.newPage();
-    await page.setViewport({ width: 1200, height: 800 });
-    await page.setJavaScriptEnabled(true);
-    console.log('🔄 New page created after crash.');
-  } catch (recoveryError) {
-    console.error('🚫 Failed to recover new page:', recoveryError.message);
-  }
-  continue;
-}
-
+      try {
+        updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
+      } catch (err) {
+        console.error(`🔥 Page error for ${profileUrl}: ${err.message}`);
+        try { await page.close(); } catch {}
+        try {
+          page = await browser.newPage();
+          await page.setViewport({ width: 1200, height: 800 });
+          await page.setJavaScriptEnabled(true);
+          console.log('🔄 New page created after crash.');
+        } catch (recoveryError) {
+          console.error('🚫 Failed to recover new page:', recoveryError.message);
+        }
+        continue;
+      }
 
       if (updates.length > 0) {
         await sheets.spreadsheets.values.batchUpdate({

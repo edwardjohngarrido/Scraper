@@ -1,5 +1,4 @@
-// Instagram Reels Scraper - Tier 3 Upgraded with Smart Scroll and Proxy Logic + Humanized Post Clicks
-
+// Instagram Reels Scraper - Merged: Add New + Update ALL Views for All Posts
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
@@ -12,8 +11,13 @@ const SHEET_ID = '19DsWqJW09VxMfNojPH9mnGJ4MCQl7m3Ud3LNLkn-Ag4';
 const SHEET_NAME = 'Sheet1';
 const SCROLL_WAIT_TIME = 4000;
 const MAX_SCROLLS = 15;
-const SMARTPROXY_ENABLED = false;
-const RANDOM_CLICK_CHANCE = 0.08; // 8% chance to open even if datetime exists
+const RANDOM_CLICK_CHANCE = 0.08;
+
+const BRAND_TAGS = [
+  '@In Print We Trust', '@in print we trust', '@InPrintWeTrust', '@inprintwetrust',
+  '@inprintwetrust.co', '@InPrintWeTrust.co', '#InPrintWeTrust', '#inprintwetrust',
+  '#IPWT', '#ipwt'
+];
 
 function getRandomUserAgent() {
   const agents = [
@@ -59,6 +63,55 @@ async function initSheets() {
   return google.sheets({ version: 'v4', auth: await auth.getClient() });
 }
 
+async function fetchIGReelsProfilesFromU() {
+  const sheets = await initSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `Sheet1!U2:U`,
+  });
+  return (res.data.values || [])
+    .map(r => r[0])
+    .filter(link =>
+      typeof link === 'string' &&
+      link.includes('instagram.com') &&
+      link.includes('/reels')
+    )
+    .map(link => link.trim().replace(/\/$/, ''));
+}
+
+async function getExistingPostLinks() {
+  const sheets = await initSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: 'Sheet1!N2:N',
+  });
+  const links = (res.data.values || []).map(r => r[0]?.split('?')[0]?.replace(/\/$/, ''));
+  return new Set(links.filter(Boolean));
+}
+
+async function findNextEmptyRowM() {
+  const sheets = await initSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: 'Sheet1!M2:M',
+  });
+  return (res.data.values ? res.data.values.length : 0) + 2;
+}
+
+// Helper to append a new row with datetime and return row index
+async function appendRowAndReturnIndex(profileUrl, postUrl, dateTime) {
+  const sheets = await initSheets();
+  const nextRow = await findNextEmptyRowM();
+  // Columns: M (profile), N (post), Q (datetime)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `Sheet1!M${nextRow}:Q${nextRow}`,
+    valueInputOption: "RAW",
+    resource: { values: [[profileUrl, postUrl, '', '', dateTime]] }
+  });
+  return nextRow;
+}
+
 async function fetchSheetData() {
   const sheets = await initSheets();
   const res = await sheets.spreadsheets.values.get({
@@ -75,7 +128,7 @@ async function fetchSheetData() {
     const hasDatetime = !!row[4]; // Column Q (index 4)
     if (!profileLink || !postLinkRaw) return;
     if (!profileLink.includes('instagram.com')) {
-      console.warn(`⚠️ Skipping invalid profile link at row ${index + 2}`);
+      // skip invalid profile
       return;
     }
     const postLink = postLinkRaw.split('?')[0].replace(/\/$/, '');
@@ -257,11 +310,130 @@ async function updateSheetBatch(updateQueue) {
   }
 }
 
-async function runScraper() {
+// =========================
+// Main Merged Scraper Flow
+// =========================
+async function runIGBrandTagScraper() {
   const browser = await launchBrowser();
   const page = await browser.newPage();
   await loadCookies(page);
 
+  // 1. ADD NEW POSTS from profile links in U
+  const igReelsProfiles = await fetchIGReelsProfilesFromU();
+  const existingPostLinks = await getExistingPostLinks();
+
+  let profileIndex = 1;
+  for (const profileUrl of igReelsProfiles) {
+    console.log(`\n=========== [${profileIndex}/${igReelsProfiles.length}] Processing IG Profile: ${profileUrl} ===========`);
+    profileIndex++;
+
+    const isInPrintWeTrust = /instagram\.com\/inprintwetrust.co\/reels/i.test(profileUrl);
+
+    await page.goto(profileUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
+    await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
+    for (let i = 0; i < 2 + Math.floor(Math.random()*3); i++) {
+      await page.mouse.move(100+Math.random()*500, 200+Math.random()*300, { steps: 3 + Math.floor(Math.random()*5) });
+      await page.mouse.wheel({ deltaY: 500 + Math.random()*300 });
+      await new Promise(resolve => setTimeout(resolve, 1200 + Math.random()*1100));
+      console.log(`   ↕️ Simulated grid scroll (${i + 1})`);
+    }
+
+    const anchors = await page.$$('a[href*="/reel/"]');
+    if (!anchors.length) continue;
+    await hoverElement(page, anchors[0]);
+    await anchors[0].click();
+    await new Promise(resolve => setTimeout(resolve, 3500 + Math.random()*1500));
+    console.log(`🎬 Opened first reel to enter viewer.`);
+
+    let taggedPosts = [];
+    let consecutiveInvalid = 0;
+    let seenLinks = new Set();
+
+    // Main viewer navigation loop
+    while (consecutiveInvalid < 8) {
+      let curUrl = page.url().split('?')[0].replace(/\/$/, '');
+      console.log(`      → Viewing reel: ${curUrl}`);
+      if (seenLinks.has(curUrl)) {
+        consecutiveInvalid++;
+        console.log(`        ⛔️ No match (${consecutiveInvalid} consecutive).`);
+      } else {
+        seenLinks.add(curUrl);
+        let desc = '';
+        try {
+          desc = await page.$eval('div.C4VMK > span', el => el.innerText);
+        } catch {
+          try {
+            desc = await page.$eval('span[role="link"]', el => el.innerText);
+          } catch {}
+        }
+        let shouldCollect = false;
+        if (isInPrintWeTrust) {
+          shouldCollect = !existingPostLinks.has(curUrl) && !taggedPosts.some(p => p.post === curUrl);
+        } else {
+          const isTagged = BRAND_TAGS.some(tag => desc.includes(tag));
+          shouldCollect = isTagged && !existingPostLinks.has(curUrl) && !taggedPosts.some(p => p.post === curUrl);
+        }
+        if (shouldCollect) {
+          let dateTime = '';
+          try {
+            dateTime = await page.$eval('time[datetime]', el => el.getAttribute('datetime'));
+            console.log(`📅 Post Date: ${dateTime}`);
+          } catch {
+            console.warn(`⚠️ No datetime found for ${curUrl}`);
+          }
+          const newRowIdx = await appendRowAndReturnIndex(profileUrl, curUrl, dateTime);
+          taggedPosts.push({ profile: profileUrl, post: curUrl, row: newRowIdx });
+          consecutiveInvalid = 0;
+          console.log(`[COLLECTED] ${curUrl} - "${desc.slice(0,60)}..."`);
+          if (isInPrintWeTrust) {
+            console.log(`        ⭐ All posts collected for @inprintwetrust.`);
+          } else {
+            console.log(`        ✅ Tag found. Resetting consecutiveInvalid.`);
+          }
+        } else {
+          consecutiveInvalid++;
+        }
+      }
+      // Human random delays/actions
+      if (Math.random() < 0.2) {
+        await page.mouse.move(200+Math.random()*400, 200+Math.random()*300, { steps: 7 + Math.floor(Math.random()*7) });
+        await new Promise(resolve => setTimeout(resolve, 800 + Math.random()*800));
+      }
+      if (Math.random() < 0.25) {
+        await page.keyboard.press('Space');
+        await new Promise(resolve => setTimeout(resolve, 300 + Math.random()*800));
+        await page.keyboard.press('Space');
+      }
+      const delayBeforeNext = 700 + Math.random() * 2000;
+      console.log(`        ⏳ Waiting ${Math.round(delayBeforeNext)}ms before moving to next reel...`);
+      await new Promise(resolve => setTimeout(resolve, delayBeforeNext));
+      const nextButtons = await page.$$('button._abl-');
+      let nextButton = null;
+      for (const btn of nextButtons) {
+        const svg = await btn.$('svg[aria-label="Next"]');
+        if (svg) { nextButton = btn; break; }
+        const title = await btn.$eval('svg > title', t => t.textContent).catch(() => null);
+        if (title && title.trim() === 'Next') { nextButton = btn; break; }
+      }
+      if (nextButton) {
+        await hoverElement(page, nextButton);
+        await nextButton.click();
+        console.log("        🖱️ Clicked the Next button.");
+        await new Promise(resolve => setTimeout(resolve, 2200 + Math.random()*1600));
+      } else {
+        console.log("        ⚠️ Next button not found; exiting viewer loop.");
+        break;
+      }
+    }
+    await page.keyboard.press('Escape');
+    await new Promise(resolve => setTimeout(resolve, 2000 + Math.random()*1700));
+    console.log(`   🚪 Exited reel viewer. Found ${taggedPosts.length} new tagged post(s).`);
+    if (taggedPosts.length === 0) console.log(`   🟡 No new tagged posts to add.`);
+    // Random wander is OPTIONAL; you may enable it if needed for human-like behavior.
+    // await new Promise(resolve => setTimeout(resolve, 3000 + Math.random()*3000));
+  }
+
+  // 2. UPDATE ALL VIEWS AND DATETIMES FOR ALL POSTS IN SHEET
   const profileMap = await fetchSheetData();
   const updateQueue = [];
 
@@ -274,20 +446,12 @@ async function runScraper() {
     console.log(`⏸ Pausing ${(pause / 1000).toFixed(1)}s before next profile...`);
     await new Promise(resolve => setTimeout(resolve, pause));
   }
-
-  // 🌐 Wander to explore page between profiles
-    if (Math.random() < 0.7) {
-      console.log('🧭 Wandering through explore page...');
-      await page.goto('https://www.instagram.com/explore/', { waitUntil: 'domcontentloaded' });
-      await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000));
-    }
-
-    await updateSheetBatch(updateQueue);
+  await updateSheetBatch(updateQueue);
   await browser.close();
-  console.log('✅ All profiles processed.');
+  console.log('✅ All IG Reels profiles processed.');
 }
 
-runScraper().catch(console.error);
+runIGBrandTagScraper().catch(console.error);
 
 async function loginAndSaveCookies() {
   const browser = await launchBrowser();

@@ -188,61 +188,19 @@ if (!found) throw new Error('Failed to find video/photo posts after 5 retries.')
   }
 }
 
-
-// 🧠 MAIN EXECUTION
-(async () => {
+async function runWorker(profileSubset) {
   const sheets = await initSheets();
   const columnLetter = 'E';
-
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!A:Z`,
-  });
-
-  const rows = res.data.values || [];
-  const profileToPostRows = {};
-
-const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000; // 14-day window
-
-rows.forEach((row, i) => {
-  const createdAt = row[0]; // Column A
-  const profileUrl = row[1];
-  const postUrl = row[2];
-  const tag = (row[3] || '').trim().toLowerCase();
-
-  if (!createdAt || !profileUrl || !postUrl) return;
-  if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
-  if (tag === 'trailblazer' || tag === 'ipwt') return;
-
-  // Parse MM/DD/YYYY as local date
-  let dateMs = null;
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(createdAt)) {
-    const [month, day, year] = createdAt.split('/').map(Number);
-    dateMs = new Date(year, month - 1, day).getTime(); // JS months are 0-based
-  } else if (!isNaN(Date.parse(createdAt))) {
-    dateMs = new Date(createdAt).getTime();
-  }
-  if (!dateMs || dateMs < cutoff) return;
-
-  const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
-  if (!postId) return;
-  if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
-  profileToPostRows[profileUrl][postId] = i + 1;
-});
-
-  const profiles = Object.entries(profileToPostRows);
-  let batchThreshold = Math.floor(Math.random() * 3) + 4;
-  let batchCounter = 0;
-
   let browser = await launchBrowser();
   let page = await browser.newPage();
   await page.setViewport({ width: 1200, height: 800 });
   await page.setJavaScriptEnabled(true);
 
-  for (const [profileUrl, postIdToRow] of profiles) {
+  for (const [profileUrl, postIdToRow] of profileSubset) {
     try {
       console.log(`🧾 Starting scrape for: ${profileUrl}`);
       let updates = [];
+
       try {
         updates = await scrapeViewsFromProfile(page, profileUrl, postIdToRow, columnLetter);
       } catch (err) {
@@ -268,25 +226,64 @@ rows.forEach((row, i) => {
       } else {
         console.log(`⚠️ No updates for ${profileUrl}`);
       }
+
     } catch (err) {
       console.error(`💥 Error during profile scrape: ${profileUrl} → ${err.message}`);
-    }
-
-    batchCounter++;
-    if (batchCounter >= batchThreshold) {
-      console.log('♻️ Restarting browser to refresh session...');
-      await page.close();
-      await browser.close();
-      browser = await launchBrowser();
-      page = await browser.newPage();
-      await page.setViewport({ width: 1200, height: 800 });
-      await page.setJavaScriptEnabled(true);
-      batchThreshold = Math.floor(Math.random() * 3) + 4;
-      batchCounter = 0;
     }
   }
 
   await page.close();
   await browser.close();
-  console.log('✅ All profiles processed.');
+  console.log('✅ Worker finished.');
+}
+
+
+(async () => {
+  const sheets = await initSheets();
+  const columnLetter = 'E';
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET_NAME}!A:Z`,
+  });
+
+  const rows = res.data.values || [];
+  const profileToPostRows = {};
+  const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+
+  rows.forEach((row, i) => {
+    const createdAt = row[0];
+    const profileUrl = row[1];
+    const postUrl = row[2];
+    const tag = (row[3] || '').trim().toLowerCase();
+
+    if (!createdAt || !profileUrl || !postUrl) return;
+    if (profileUrl.includes('instagram.com') || postUrl.includes('instagram.com')) return;
+    if (tag === 'trailblazer' || tag === 'ipwt') return;
+
+    let dateMs = null;
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(createdAt)) {
+      const [month, day, year] = createdAt.split('/').map(Number);
+      dateMs = new Date(year, month - 1, day).getTime();
+    } else if (!isNaN(Date.parse(createdAt))) {
+      dateMs = new Date(createdAt).getTime();
+    }
+    if (!dateMs || dateMs < cutoff) return;
+
+    const postId = postUrl.match(/\/(video|photo)\/(\d+)/)?.[2];
+    if (!postId) return;
+    if (!profileToPostRows[profileUrl]) profileToPostRows[profileUrl] = {};
+    profileToPostRows[profileUrl][postId] = i + 1;
+  });
+
+  const profiles = Object.entries(profileToPostRows);
+  const workerCount = 3;
+  const chunkSize = Math.ceil(profiles.length / workerCount);
+  const chunks = Array.from({ length: workerCount }, (_, i) =>
+    profiles.slice(i * chunkSize, (i + 1) * chunkSize)
+  );
+
+  console.log(`🚀 Launching ${workerCount} workers...`);
+  await Promise.all(chunks.map(chunk => runWorker(chunk)));
+  console.log('🎉 All workers complete!');
 })();

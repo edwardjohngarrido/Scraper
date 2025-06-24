@@ -360,11 +360,15 @@ async function runIGBrandTagScraper() {
         seenLinks.add(curUrl);
         let desc = '';
         try {
-          desc = await page.$eval('div.C4VMK > span', el => el.innerText);
+          desc = await page.$eval('h1._ap3a', el => el.innerText);
         } catch {
           try {
-            desc = await page.$eval('span[role="link"]', el => el.innerText);
-          } catch {}
+            desc = await page.$eval('div.C4VMK > span', el => el.innerText);
+          } catch {
+            try {
+              desc = await page.$eval('span[role="link"]', el => el.innerText);
+            } catch {}
+          }
         }
         let shouldCollect = false;
         if (isInPrintWeTrust) {

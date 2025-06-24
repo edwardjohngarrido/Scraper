@@ -195,12 +195,18 @@ posts.forEach(({ postLink, rowIndex }) => {
         const viewSpan = svg ? await svg.evaluateHandle(el => el.parentElement.nextElementSibling) : null;
         const viewsRaw = viewSpan ? await viewSpan.evaluate(el => el.innerText) : 'N/A';
         const views = normalizeViewCount(viewsRaw);
-        if (!viewsRaw) console.warn(`⚠️ No views found for post ${href}`);
+        if (!viewsRaw) {
+          console.warn(`⚠️ No views found for post ${href}`);
+        }
         console.log(`👁️ View Count: ${views}`);
 
         const row = postIdToRow[postId];
-        updateQueue.push({ range: `${SHEET_NAME}!E${row}`, values: [[views]] });
-        
+        if (views !== null && views !== undefined) {
+          updateQueue.push({ range: `${SHEET_NAME}!E${row}`, values: [[views]] });
+        } else {
+          console.warn(`⏩ Skipping update for ${href} (no view count found, keeping old value)`);
+        }
+
         const shouldOpen = postMeta[postId] || Math.random() < RANDOM_CLICK_CHANCE;
 
         if (shouldOpen) {

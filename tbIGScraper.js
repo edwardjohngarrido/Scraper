@@ -359,17 +359,20 @@ async function runIGBrandTagScraper() {
       } else {
         seenLinks.add(curUrl);
         let desc = '';
-        try {
-          desc = await page.$eval('h1._ap3a', el => el.innerText);
-        } catch {
-          try {
-            desc = await page.$eval('div.C4VMK > span', el => el.innerText);
-          } catch {
-            try {
-              desc = await page.$eval('span[role="link"]', el => el.innerText);
-            } catch {}
-          }
-        }
+try {
+  await page.waitForSelector('h1._ap3a', { timeout: 10000 }); // waits up to 10 seconds
+  desc = await page.$eval('h1._ap3a', el => el.innerText);
+} catch {
+  try {
+    await page.waitForSelector('div.C4VMK > span', { timeout: 5000 });
+    desc = await page.$eval('div.C4VMK > span', el => el.innerText);
+  } catch {
+    try {
+      await page.waitForSelector('span[role="link"]', { timeout: 3000 });
+      desc = await page.$eval('span[role="link"]', el => el.innerText);
+    } catch {}
+  }
+}
         let shouldCollect = false;
         if (isInPrintWeTrust) {
           shouldCollect = !existingPostLinks.has(curUrl) && !taggedPosts.some(p => p.post === curUrl);

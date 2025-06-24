@@ -140,12 +140,17 @@ async function fetchSheetData() {
 }
 
 async function hoverElement(page, elementHandle) {
-  const box = await elementHandle.boundingBox();
-  if (box) {
-    const x = box.x + box.width / 2 + (Math.random() * 10 - 5);
-    const y = box.y + box.height / 2 + (Math.random() * 10 - 5);
-    await page.mouse.move(x, y);
-    await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 700));
+  try {
+    if (!elementHandle) return;
+    const box = await elementHandle.boundingBox();
+    if (box) {
+      const x = box.x + box.width / 2 + (Math.random() * 10 - 5);
+      const y = box.y + box.height / 2 + (Math.random() * 10 - 5);
+      await page.mouse.move(x, y);
+      await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 700));
+    }
+  } catch (err) {
+    console.warn('⚠️ Failed to move mouse:', err.message);
   }
 }
 
@@ -332,7 +337,12 @@ async function runIGBrandTagScraper() {
     await page.goto(profileUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
     await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
     for (let i = 0; i < 2 + Math.floor(Math.random()*3); i++) {
-      await page.mouse.move(100+Math.random()*500, 200+Math.random()*300, { steps: 3 + Math.floor(Math.random()*5) });
+      try {
+  await page.mouse.move(100+Math.random()*500, 200+Math.random()*300, { steps: 3 + Math.floor(Math.random()*5) });
+} catch (err) {
+  console.warn("⚠️ Simulated mouse move failed:", err.message);
+}
+
       await page.mouse.wheel({ deltaY: 500 + Math.random()*300 });
       await new Promise(resolve => setTimeout(resolve, 1200 + Math.random()*1100));
       console.log(`   ↕️ Simulated grid scroll (${i + 1})`);
@@ -341,7 +351,12 @@ async function runIGBrandTagScraper() {
     const anchors = await page.$$('a[href*="/reel/"]');
     if (!anchors.length) continue;
     await hoverElement(page, anchors[0]);
-    await anchors[0].click();
+    try {
+  await anchors[0].click();
+} catch (err) {
+  console.warn("⚠️ Failed to click anchor:", err.message);
+}
+
     await new Promise(resolve => setTimeout(resolve, 3500 + Math.random()*1500));
     console.log(`🎬 Opened first reel to enter viewer.`);
 
@@ -403,9 +418,14 @@ try {
       }
       // Human random delays/actions
       if (Math.random() < 0.2) {
-        await page.mouse.move(200+Math.random()*400, 200+Math.random()*300, { steps: 7 + Math.floor(Math.random()*7) });
-        await new Promise(resolve => setTimeout(resolve, 800 + Math.random()*800));
-      }
+  try {
+    await page.mouse.move(200+Math.random()*400, 200+Math.random()*300, { steps: 7 + Math.floor(Math.random()*7) });
+  } catch (err) {
+    console.warn("⚠️ Random mouse move in viewer failed:", err.message);
+  }
+  await new Promise(resolve => setTimeout(resolve, 800 + Math.random()*800));
+}
+
       if (Math.random() < 0.25) {
         await page.keyboard.press('Space');
         await new Promise(resolve => setTimeout(resolve, 300 + Math.random()*800));
@@ -424,9 +444,15 @@ try {
       }
       if (nextButton) {
         await hoverElement(page, nextButton);
-        await nextButton.click();
-        console.log("        🖱️ Clicked the Next button.");
-        await new Promise(resolve => setTimeout(resolve, 2200 + Math.random()*1600));
+        try {
+  await nextButton.click();
+  console.log("        🖱️ Clicked the Next button.");
+  await new Promise(resolve => setTimeout(resolve, 2200 + Math.random()*1600));
+} catch (err) {
+  console.warn("⚠️ Failed to click Next button:", err.message);
+  break;
+}
+
       } else {
         console.log("        ⚠️ Next button not found; exiting viewer loop.");
         break;

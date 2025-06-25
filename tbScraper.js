@@ -514,8 +514,8 @@ while (true) {
     }
   }
 
-  if (consecutiveExisting >= 20) {
-    console.log("🛑 Stopping — 20 consecutive uncollectable or known posts.");
+  if (consecutiveExisting >= 8) {
+    console.log("🛑 Stopping — 8 consecutive uncollectable or known posts.");
     break;
   }
 
@@ -547,33 +547,111 @@ while (true) {
   existingPosts = await refreshExistingPosts();
   console.log(`🔁 Refreshed existingPosts (${Object.keys(existingPosts).length} total).`);
 
-  console.log("⏳ Waiting for grid posts to load...");
-  await randomDelay(3000, 12000);
+//   console.log("⏳ Waiting for grid posts to load...");
+//   await randomDelay(3000, 12000);
 
-  const viewsData = await page.evaluate(() => {
-    const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
-    return posts.map(post => {
-      const href = post.getAttribute('href')?.split('?')[0];
-      const viewEl = post.querySelector('strong[data-e2e="video-views"]');
-      const views = viewEl?.innerText || null;
-      return { href, views };
-    });
-  });
+//   const viewsData = await page.evaluate(() => {
+//     const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+//     return posts.map(post => {
+//       const href = post.getAttribute('href')?.split('?')[0];
+//       const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+//       const views = viewEl?.innerText || null;
+//       return { href, views };
+//     });
+//   });
 
-  const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
-  for (let { href, views } of filteredViewsData) {
-    const match = href.match(/\/(video|photo)\/(\d+)/);
-    const postId = match?.[2];
-    if (!postId || !views) continue;
+//   const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
+//   for (let { href, views } of filteredViewsData) {
+//     const match = href.match(/\/(video|photo)\/(\d+)/);
+//     const postId = match?.[2];
+//     if (!postId || !views) continue;
 
-    const rowNumber = existingPosts[postId];
-    if (!rowNumber) continue;
+//     const rowNumber = existingPosts[postId];
+//     if (!rowNumber) continue;
 
-    console.log(`✅ Updating view count: ${views} for ${href}`);
-    updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+//     console.log(`✅ Updating view count: ${views} for ${href}`);
+//     updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+//   }
+
+//   await updateGoogleSheets();
+
+// === PATCH: Go back to grid, scroll until all posts are older than 2 months, then grab view counts ===
+
+// 1. Go back to the grid view
+await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
+await dismissInterestModal(page);
+await randomDelay(3000, 6000);
+
+// 2. Scroll grid until all visible posts are older than 2 months
+const gridCutoffDate = new Date();
+gridCutoffDate.setMonth(gridCutoffDate.getMonth() - 2);
+
+let prevCount = 0;
+let currCount = 0;
+let scrollTries = 0;
+let keepScrolling = true;
+
+while (keepScrolling && scrollTries < 20) {
+  prevCount = currCount;
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await randomDelay(3000, 6000);
+
+  // Get all post links and their post IDs
+  const postInfo = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', els =>
+    els.map(a => {
+      const href = a.getAttribute('href');
+      const match = href ? href.match(/\/(video|photo)\/(\d+)/) : null;
+      return { href: href?.split('?')[0], postId: match?.[2] };
+    })
+  );
+  currCount = postInfo.length;
+
+  // Convert postId to date and check if any are within cutoff
+  let foundRecent = false;
+  for (const { postId } of postInfo) {
+    if (!postId) continue;
+    const postDate = convertPostIdToDate(postId); // ← your helper
+    if (postDate && postDate >= gridCutoffDate) {
+      foundRecent = true;
+      break;
+    }
   }
 
-  await updateGoogleSheets();
+  // Stop scrolling if no recent posts left, or no new posts loaded
+  if (!foundRecent || currCount <= prevCount) keepScrolling = false;
+  scrollTries++;
+}
+
+await randomDelay(1200, 1800);
+
+console.log(`🧩 Finished grid scroll. Loaded ${currCount} thumbnails.`);
+
+// 3. Scrape views from grid
+const viewsData = await page.evaluate(() => {
+  const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+  return posts.map(post => {
+    const href = post.getAttribute('href')?.split('?')[0];
+    const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+    const views = viewEl?.innerText || null;
+    return { href, views };
+  });
+});
+
+const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
+for (let { href, views } of filteredViewsData) {
+  const match = href.match(/\/(video|photo)\/(\d+)/);
+  const postId = match?.[2];
+  if (!postId || !views) continue;
+
+  const rowNumber = existingPosts[postId];
+  if (!rowNumber) continue;
+
+  console.log(`✅ Updating view count: ${views} for ${href}`);
+  updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+}
+
+await updateGoogleSheets();
+
 }
 
 async function refreshExistingPosts() {
@@ -916,7 +994,7 @@ async function dismissInterestModal(page) {
     }
 
     // 2. Split into 3 chunks
-    const numBots = 3;
+    const numBots = 5;
     const chunks = splitArrayIntoChunks(allProfiles, numBots);
 
     // 3. Run all bots in parallel

@@ -156,7 +156,7 @@ function cleanUpTempProfile(browser) {
 //     const sheets = await initSheets();
 //     const response = await sheets.spreadsheets.values.get({
 //         spreadsheetId: SHEET_ID,
-//         range: 'Sheet2!A:D',
+//         range: 'Sheet1!A:D',
 //     });
 
 //     let profileDateRanges = {};
@@ -526,7 +526,7 @@ while (true) {
   if (collectedLinks.length > 0) {
     const existing = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet2!C:C'
+      range: 'Sheet1!C:C'
     });
     const existingValues = existing.data.values || [];
     const nextRow = existingValues.length + 1;
@@ -534,12 +534,12 @@ while (true) {
 
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `Sheet2!C${nextRow}`,
+      range: `Sheet1!C${nextRow}`,
       valueInputOption: 'RAW',
       resource: { values }
     });
 
-    console.log(`✅ Appended ${collectedLinks.length} links to Sheet2 starting at row ${nextRow}`);
+    console.log(`✅ Appended ${collectedLinks.length} links to Sheet1 starting at row ${nextRow}`);
   } else {
     console.log("ℹ️ No new links collected.");
   }
@@ -570,7 +570,7 @@ while (true) {
 //     if (!rowNumber) continue;
 
 //     console.log(`✅ Updating view count: ${views} for ${href}`);
-//     updateQueue.push({ range: `Sheet2!D${rowNumber}`, values: [[views]] });
+//     updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
 //   }
 
 //   await updateGoogleSheets();
@@ -647,7 +647,7 @@ for (let { href, views } of filteredViewsData) {
   if (!rowNumber) continue;
 
   console.log(`✅ Updating view count: ${views} for ${href}`);
-  updateQueue.push({ range: `Sheet2!D${rowNumber}`, values: [[views]] });
+  updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
 }
 
 await updateGoogleSheets();
@@ -658,7 +658,7 @@ async function refreshExistingPosts() {
     const sheets = await initSheets();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet2!A:D',
+      range: 'Sheet1!A:D',
     });
   
     let result = {};
@@ -789,7 +789,7 @@ async function getLastKnownLinks() {
     const sheets = await initSheets();
     const response = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
-        range: 'Sheet2!A:C',
+        range: 'Sheet1!A:C',
     });
 
     const rows = response.data.values || [];
@@ -834,7 +834,7 @@ async function processProfilesChunk(profiles, sheets, prioritizedProfiles, worke
     // console.log("📥 Fetching profiles from Column U...");
 //     const rangeResponse = await sheets.spreadsheets.values.get({
 //       spreadsheetId: SHEET_ID,
-//       range: 'Sheet2!U2:U'
+//       range: 'Sheet1!U2:U'
 //     });
 
 //     console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
@@ -973,7 +973,7 @@ async function dismissInterestModal(page) {
     // 1. Fetch all profiles as before
     const rangeResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
-        range: 'Sheet2!U2:U'
+        range: 'Sheet1!U2:U'
     });
 
     if (!rangeResponse.data || !rangeResponse.data.values) {

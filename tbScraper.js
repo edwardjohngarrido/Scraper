@@ -23,7 +23,7 @@ function convertPostIdToUnix(postId) {
 const proxyChain = require('proxy-chain');
 
 const proxyList = [
-    'http://spynfny9yy:4Ceet67~xzzDbH1spC@gb.smartproxy.com:30000'
+    'http://spynfny9yy:4Ceet67~xzzDbH1spC@gb.decodo.com:30000'
 ];
 
 function getPreviousRunUsage() {
@@ -43,18 +43,16 @@ function getDynamicProxyChance() {
     return Math.min(chance, 0.5);
 }
 
-function shouldUseProxyForProfile(profileName, prioritizedProfiles) {
-    if (!prioritizedProfiles.has(profileName)) return false;
-    const probability = getDynamicProxyChance();
-    const roll = Math.random();
-    return roll < probability;
-}
+// function shouldUseProxyForProfile(profileName, prioritizedProfiles) {
+//     if (!prioritizedProfiles.has(profileName)) return false;
+//     const probability = getDynamicProxyChance();
+//     const roll = Math.random();
+//     return roll < probability;
+// }
 
-async function initBrowser(profileName, prioritizedProfiles) {
+async function initBrowser(useProxy = false) {
     let extensionPath = "C:\\Users\\edwar\\Downloads\\TikTok-Captcha-Solver-Chrome-Web-Store";
     const secondaryPath = "C:\\Users\\edwardjohngarrido\\Desktop\\Scraper\\TikTok-Captcha-Solver-Chrome-Web-Store";
-
-    // Switch to secondary if default path doesn't exist
     if (!fs.existsSync(extensionPath) && fs.existsSync(secondaryPath)) {
         console.warn("⚠️ Default extension path not found. Using secondary extension path.");
         extensionPath = secondaryPath;
@@ -63,19 +61,14 @@ async function initBrowser(profileName, prioritizedProfiles) {
     const traffic = await fetchSmartproxyTraffic();
     const remaining = traffic.limit - traffic.used;
     const estimatedRunUsage = getPreviousRunUsage();
-
-    const wouldUseProxy = shouldUseProxyForProfile(profileName, prioritizedProfiles);
-    const shouldUseProxy = remaining > estimatedRunUsage && wouldUseProxy;
     const randomProxy = proxyList[Math.floor(Math.random() * proxyList.length)];
 
-    if (shouldUseProxy) {
-        console.log(`✅ Proxy allowed for ${profileName}`);
-    } else if (wouldUseProxy && remaining <= estimatedRunUsage) {
-        console.log(`💸 Would've used proxy for ${profileName} but you're outta budget. Using static IP instead. 🧍`);
-        console.log(`🤫 If we had enough traffic left, this proxy would've been used: ${randomProxy}`);
-        console.log(`💀 Broke Mode Activated. Using static IP like it’s 1999.`);
-    } else {
-        console.log(`🌐 Proxy skipped for ${profileName} (not in randomized group this run).`);
+    // USE PROXY if flag is true, AND you have quota remaining
+    if (useProxy && remaining > estimatedRunUsage) {
+        console.log(`✅ Proxy allowed for this run`);
+    } else if (useProxy && remaining <= estimatedRunUsage) {
+        console.log(`💸 Would've used proxy but you're outta budget. Using static IP instead.`);
+        useProxy = false;
     }
 
     let args = [
@@ -94,7 +87,7 @@ async function initBrowser(profileName, prioritizedProfiles) {
         `--load-extension=${extensionPath}`,
     ];
 
-    if (shouldUseProxy) {
+    if (useProxy) {
         const newProxyUrl = await proxyChain.anonymizeProxy(randomProxy);
         args.push(`--proxy-server=${newProxyUrl}`);
         console.log(`🔀 Selected Proxy: ${randomProxy}`);
@@ -151,76 +144,15 @@ function cleanUpTempProfile(browser) {
     }
 }
 
-
-// async function getProfileDateRanges() {
-//     const sheets = await initSheets();
-//     const response = await sheets.spreadsheets.values.get({
-//         spreadsheetId: SHEET_ID,
-//         range: 'Sheet1!A:D',
-//     });
-
-//     let profileDateRanges = {};
-//     let profilePostCounts = {}; // 👈 counts per profile
-
-//     response.data.values.slice(1).forEach(row => {
-//         const profile = row[1] ? row[1].trim() : null;
-//         const postUrl = row[2] ? row[2].trim() : "";
-
-//         console.log(`🔗 Checking URL: ${postUrl}`);
-
-//         // Extract post ID from video/photo URLs
-//         const postIdMatch = postUrl.match(/\/(video|photo)\/(\d+)/);
-//         const postId = postIdMatch ? postIdMatch[2] : null;
-
-//         if (!postId) {
-//             console.log(`⚠️ No valid post ID found in: ${postUrl}`);
-//             return;
-//         }
-
-//         const postDate = convertPostIdToDate(postId);
-//         console.log(`📅 Extracted Post Date: ${postDate.toUTCString()} (from Post ID: ${postId})`);
-
-//         if (!postDate || isNaN(postDate.getTime())) {
-//             console.log(`❌ Invalid date detected for post ID: ${postId}, URL: ${postUrl}`);
-//             return;
-//         }
-
-//         // ✅ Count posts per profile
-//         if (profile) {
-//             profilePostCounts[profile] = (profilePostCounts[profile] || 0) + 1;
-//         }
-
-//         if (!profileDateRanges[profile]) {
-//             profileDateRanges[profile] = {
-//                 minDate: postDate,
-//                 maxDate: postDate
-//             };
-//         } else {
-//             profileDateRanges[profile].minDate = postDate < profileDateRanges[profile].minDate ? postDate : profileDateRanges[profile].minDate;
-//             profileDateRanges[profile].maxDate = postDate > profileDateRanges[profile].maxDate ? postDate : profileDateRanges[profile].maxDate;
-//         }
-
-//         console.log(`✅ Profile: ${profile} | minDate: ${profileDateRanges[profile].minDate.toUTCString()} | maxDate: ${profileDateRanges[profile].maxDate.toUTCString()}`);
-//     });
-
-//     const sortedProfiles = Object.keys(profileDateRanges).sort((a, b) => {
-//         const countA = profilePostCounts[a] || 0;
-//         const countB = profilePostCounts[b] || 0;
-//         return countB - countA;
-//     });
-
-//     return { profileDateRanges, sortedProfiles };
-// }
-
 async function isVerificationModalPresent(page) {
-    // Checks for the "Verifying..." modal or spinner
-    return await page.$x("//div[contains(text(), 'Verifying')]")
-        .then(elems => elems.length > 0);
+    // CSS-based detection for "Verifying..." modal or spinner (case-insensitive)
+    const text = await page.evaluate(() => document.body.innerText);
+    return text.toLowerCase().includes("verifying");
 }
 async function isUnableToVerify(page) {
-    // Checks for the "Unable to verify. Please try again." error
-    return await page.$x("//div[contains(text(), 'Unable to verify')]")
-        .then(elems => elems.length > 0);
+    // CSS-based detection for "Unable to verify. Please try again." (case-insensitive)
+    const text = await page.evaluate(() => document.body.innerText);
+    return text.toLowerCase().includes("unable to verify");
 }
 
 
@@ -241,6 +173,27 @@ function convertPostIdToDate(postId) {
         console.log(`❌ Error converting post ID: ${postId}`, error);
         return null;
     }
+}
+
+function normalizeViews(viewStr) {
+    if (!viewStr) return 0;
+    viewStr = ("" + viewStr).trim().toUpperCase();
+    if (viewStr.endsWith('K')) return Math.round(parseFloat(viewStr) * 1000);
+    if (viewStr.endsWith('M')) return Math.round(parseFloat(viewStr) * 1000000);
+    if (viewStr.endsWith('B')) return Math.round(parseFloat(viewStr) * 1000000000);
+    return parseInt(viewStr.replace(/,/g, '')) || 0;
+}
+function prettyDate(isoDateStr) {
+  if (!isoDateStr) return '';
+  const d = new Date(isoDateStr);
+  if (isNaN(d)) return '';
+  // e.g., "July 1, 2025"
+  return d.toLocaleString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC'
+  });
 }
 
 async function randomDelay(min, max) {
@@ -357,7 +310,7 @@ for (const link of postLinks) {
     return allLoadedPosts;
 }
 
-async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint, sheets) {
+async function scrapeProfile(page, profileUrl, profileDateRange, existingPosts, lastKnownLink, isInprint, sheets, isHighPriority, isLowPriority) {
   const BRAND_TAGS = [
     '@In Print We Trust', '@in print we trust', '@InPrintWeTrust', '@inprintwetrust',
     '@inprintwetrust.co', '@InPrintWeTrust.co', '#InPrintWeTrust', '#inprintwetrust',
@@ -400,56 +353,201 @@ let profileLoaded = false;
         return;
     }
 
+    // PATCH: captcha check right here!
+if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+    console.log("🛑 Verification/captcha detected during grid scraping (post profile load). Closing browser/session and retrying later.");
+    try { await page.close(); } catch(e) {}
+    if (page.browser()) {
+        try { await page.browser().close(); } catch(e) {}
+    }
+    if (typeof cleanUpTempProfile === "function") cleanUpTempProfile(page.browser());
+    return;
+}
+
+// Wait for the profile grid container to appear before trying to get thumbnails
+const gridSelector = 'main [data-e2e="user-post-list"]';
+let gridLoaded = false;
+let hadInitialGrid = false;  // <--- NEW FLAG
+
+try {
+    await page.waitForSelector(gridSelector, {timeout: 15000});
+    gridLoaded = true;
+} catch (e) {
+    console.warn("⚠️ Profile grid did not load (selector timeout). Checking for captcha or slow load...");
+    if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+        console.log("🛑 Verification/captcha detected after grid selector timeout.");
+        try { await page.close(); } catch(e) {}
+        if (page.browser()) { try { await page.browser().close(); } catch(e) {} }
+        if (typeof cleanUpTempProfile === "function") cleanUpTempProfile(page.browser());
+        return;
+    }
+    await randomDelay(8000, 12000);
+}
+
+// Now, try for thumbnails
 let thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
 let retries = 0;
-
+if (thumbnails.length > 0) {
+    hadInitialGrid = true;
+}
 while (thumbnails.length === 0 && retries < 5) {
-  retries++;
-  if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+    retries++;
+    if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
         console.log("🛑 Verification or captcha error detected. Halting further retries and waiting...");
         await randomDelay(30000, 120000);
         return;
     }
-  console.warn(`🔁 Retry ${retries}/5 — No thumbnails found on ${profileUrl}`);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await randomDelay(5000, 10000);
-  thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
+    console.warn(`🔁 Retry ${retries}/5 — No thumbnails found on ${profileUrl}`);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await randomDelay(5000, 10000);
+    thumbnails = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
+    if (thumbnails.length > 0) {
+        hadInitialGrid = true;
+    }
 }
 
+// FINAL check after all retries
 if (thumbnails.length === 0) {
-  console.log(`⚠️ Still no thumbnails after 5 retries on ${profileUrl}. Proceeding to views scraping.`);
-  return { links: [], fromCache: false, skipLinkScrape: true }; // Do NOT skip — allow views scrape
+    if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+        console.log("🛑 Verification/captcha detected after 0 thumbnails.");
+        try { await page.close(); } catch(e) {}
+        if (page.browser()) { try { await page.browser().close(); } catch(e) {} }
+        if (typeof cleanUpTempProfile === "function") cleanUpTempProfile(page.browser());
+        return;
+    }
+    // Only treat as empty if you NEVER had any thumbnails
+    if (!hadInitialGrid) {
+        const pageText = await page.evaluate(() => document.body.innerText);
+        if (pageText.toLowerCase().includes("no content") || pageText.toLowerCase().includes("no posts yet")) {
+            console.log("🛑 No posts or content on this profile. Skipping.");
+            return;
+        }
+        console.warn("⚠️ Loaded 0 thumbnails after scrolling, but no captcha detected. Skipping.");
+        return { links: [], fromCache: false, skipLinkScrape: true };
+    } else {
+        // If you had posts before, be extremely conservative: retry up to 12 times (and NEVER skip unless 12x fails)
+        let retryAttempts = 0;
+        let postGridThumbs = [];
+        const maxSafeRetries = 12;
+        while (retryAttempts < maxSafeRetries && postGridThumbs.length === 0) {
+            retryAttempts++;
+            console.warn(`⚠️ Had grid before; now no thumbs. Reloading grid for views scrape... [try ${retryAttempts}/${maxSafeRetries}]`);
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await randomDelay(4000, 8000);
+            postGridThumbs = await page.$$('a[href*="/video/"], a[href*="/photo/"]');
+            if (postGridThumbs.length > 0) break;
+        }
+        if (postGridThumbs.length === 0) {
+            console.warn("❗ FINAL WARNING: Had grid/thumbnails earlier, but TikTok hid them after 12 reloads. Skipping update for this profile. If you see this often, TikTok is rate-limiting or blocking grid access!");
+            return;
+        }
+        thumbnails = postGridThumbs;
+    }
 }
 
+// === PATCH: extract all post data from the grid ===
+const gridPosts = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', links =>
+  links.map(a => {
+    const href = a.href.split('?')[0];
+    const viewEl = a.querySelector('strong[data-e2e="video-views"]');
+    const views = viewEl?.innerText || null;
+    const match = href.match(/\/(video|photo)\/(\d+)/);
+    const postId = match ? match[2] : null;
+    return { href, views, postId };
+  })
+);
+// Add post date for each
+gridPosts.forEach(post => {
+  post.date = post.postId ? convertPostIdToDate(post.postId) : null;
+});
+
+// --- Set viewer scraping depth based on profile priority ---
+let maxViewerDepth = gridPosts.length; // default: all
+if (isHighPriority) {
+  maxViewerDepth = gridPosts.length <= 10 ? gridPosts.length : Math.ceil(gridPosts.length / 2);
+} else if (isLowPriority) {
+  maxViewerDepth = gridPosts.length <= 10 ? gridPosts.length : Math.ceil(gridPosts.length / 4);
+}
+console.log(`🔎 Will scrape up to ${maxViewerDepth} posts in viewer for this profile.`);
 
 
-  // After clicking the first thumbnail and dismissing modal
-await thumbnails[0].click();
-await randomDelay(3000, 6000);
+if (isInprint) {
+  // For InPrintWeTrust and IPWTStreetalk: Just use grid data, skip viewer logic.
+  // (Optionally filter by date range here if needed)
+  for (const post of gridPosts) {
+    if (!post.postId || !post.views) continue;
+    // Example: Only include posts from last 2 months
+    const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 2);
+    if (!post.date || post.date < cutoff) continue;
+    // Write to Google Sheets: adjust this for your schema
+    // If you want to batch update, prepare `updateQueue` here
+    // E.g., find row number, then push to updateQueue
+    // See your existing "Scrape views from grid" code for updateQueue usage
 
-// 🧠 Ensure viewer mode is actually opened (check for /video/ or /photo/ in URL)
-let retryCount = 0;
-while (!page.url().includes('/video/') && !page.url().includes('/photo/') && retryCount < 5) {
-  console.log("⏳ Viewer not open yet. Retrying post click...");
-  await dismissInterestModal(page);
-  let retryCount = 0;
+    // This is just for demonstration:
+    const rowNumber = existingPosts[post.postId];
+    if (rowNumber) {
+      const postISO = convertPostIdToUnix(post.postId);
+      const pretty = prettyDate(postISO);
+      const normalizedViews = normalizeViews(post.views);
+      updateQueue.push({
+        range: `Sheet1!D${rowNumber}:F${rowNumber}`,
+        values: [[
+          normalizedViews, // D (views)
+          pretty,          // E
+          postISO          // F
+        ]]
+      });
+      console.log(`✅ [INPRINT] Updating: views=${normalizedViews}, G=${pretty}, H=${postISO} for ${post.href}`);
+    }
+  }
+  await updateGoogleSheets();
+  // End this profile's processing immediately
+  return;
+}
+
+// Build a list of post links to ensure we always get the current grid elements
+const postLinks = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', links =>
+  links.map(a => a.href.split('?')[0])
+);
+
+// Try each post link individually
 let viewerOpened = false;
-while (!viewerOpened && retryCount < 10) {
-  console.log("Viewer not open yet. Retrying post click...");
-  await thumbnails[0].click();
-  await randomDelay(3000, 12000);
-  viewerOpened = await page.evaluate(() => {
-    return !!document.querySelector('[data-e2e="browse-video-feed"]');
-  });
-  retryCount++;
+for (const link of postLinks) {
+  const thumb = await page.$(`a[href*="${link.split('/').pop()}"]`);
+  if (!thumb) {
+    console.log(`⚠️ Could not find thumbnail for ${link}. Skipping.`);
+    continue;
+  }
+  await thumb.evaluate(node => node.scrollIntoView({behavior: "auto", block: "center"}));
+  await randomDelay(500, 1200);
+
+  let clickTries = 0;
+  while (!viewerOpened && clickTries < 5) {
+    await thumb.click();
+    await randomDelay(2000, 6000);
+    viewerOpened = await page.evaluate(() =>
+      !!document.querySelector('[data-e2e="browse-video-feed"]') ||
+      window.location.pathname.includes('/video/') ||
+      window.location.pathname.includes('/photo/')
+    );
+    if (!viewerOpened) {
+      console.log('Viewer not open yet. Retrying post click...');
+      await randomDelay(1000, 2000);
+    }
+    clickTries++;
+  }
+  if (viewerOpened) {
+    console.log(`✅ Viewer opened for post: ${link}`);
+    break; // Stop after successfully opening the first modal!
+  }
 }
 if (!viewerOpened) {
-  console.warn("⚠️ Viewer failed to open after 10 tries. Skipping post.");
-  continue;
+  console.warn(`⚠️ Could not open viewer for any post on profile. Skipping scraping.`);
+  return;
 }
 
-  retryCount++;
-}
+// Now begin your scraping loop (while true, ArrowDown, etc)
 
 if (!page.url().includes('/video/') && !page.url().includes('/photo/')) {
   console.warn("⚠️ Viewer still not opened after retry. Will continue but viewer may be stuck.");
@@ -462,6 +560,7 @@ if (!page.url().includes('/video/') && !page.url().includes('/photo/')) {
   const seenLinks = new Set();
   let collectedLinks = [];
   let consecutiveExisting = 0;
+  let viewerDepth = 0;
 
 while (true) {
   await randomDelay(3000, 12000);
@@ -520,6 +619,11 @@ while (true) {
   }
 
   try { await page.keyboard.press('ArrowDown'); } catch { break; }
+  viewerDepth++;
+if (viewerDepth >= maxViewerDepth) {
+  console.log(`🛑 Reached viewer depth limit (${maxViewerDepth}) for this profile.`);
+  break;
+}
 }
 
 
@@ -547,110 +651,149 @@ while (true) {
   existingPosts = await refreshExistingPosts();
   console.log(`🔁 Refreshed existingPosts (${Object.keys(existingPosts).length} total).`);
 
-//   console.log("⏳ Waiting for grid posts to load...");
-//   await randomDelay(3000, 12000);
-
-//   const viewsData = await page.evaluate(() => {
-//     const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
-//     return posts.map(post => {
-//       const href = post.getAttribute('href')?.split('?')[0];
-//       const viewEl = post.querySelector('strong[data-e2e="video-views"]');
-//       const views = viewEl?.innerText || null;
-//       return { href, views };
-//     });
-//   });
-
-//   const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
-//   for (let { href, views } of filteredViewsData) {
-//     const match = href.match(/\/(video|photo)\/(\d+)/);
-//     const postId = match?.[2];
-//     if (!postId || !views) continue;
-
-//     const rowNumber = existingPosts[postId];
-//     if (!rowNumber) continue;
-
-//     console.log(`✅ Updating view count: ${views} for ${href}`);
-//     updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
-//   }
-
-//   await updateGoogleSheets();
-
-// === PATCH: Go back to grid, scroll until all posts are older than 2 months, then grab view counts ===
-
-// 1. Go back to the grid view
-await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
-await dismissInterestModal(page);
-await randomDelay(3000, 6000);
-
-// 2. Scroll grid until all visible posts are older than 2 months
-const gridCutoffDate = new Date();
-gridCutoffDate.setMonth(gridCutoffDate.getMonth() - 2);
-
-let prevCount = 0;
-let currCount = 0;
-let scrollTries = 0;
-let keepScrolling = true;
-
-while (keepScrolling && scrollTries < 20) {
-  prevCount = currCount;
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await randomDelay(3000, 6000);
-
-  // Get all post links and their post IDs
-  const postInfo = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', els =>
-    els.map(a => {
-      const href = a.getAttribute('href');
-      const match = href ? href.match(/\/(video|photo)\/(\d+)/) : null;
-      return { href: href?.split('?')[0], postId: match?.[2] };
-    })
-  );
-  currCount = postInfo.length;
-
-  // Convert postId to date and check if any are within cutoff
-  let foundRecent = false;
-  for (const { postId } of postInfo) {
-    if (!postId) continue;
-    const postDate = convertPostIdToDate(postId); // ← your helper
-    if (postDate && postDate >= gridCutoffDate) {
-      foundRecent = true;
-      break;
-    }
+// 1. Gather brand-tagged new posts (collectedLinks already has the links)
+let taggedNewPosts = [];
+for (const link of collectedLinks) {
+  const gridData = gridPosts.find(p => p.href === link);
+  if (gridData && gridData.postId) {
+    taggedNewPosts.push(gridData);
   }
-
-  // Stop scrolling if no recent posts left, or no new posts loaded
-  if (!foundRecent || currCount <= prevCount) keepScrolling = false;
-  scrollTries++;
 }
 
-await randomDelay(1200, 1800);
+// 2. Gather all posts already in the sheet (by postId), from gridPosts
+let existingSheetPosts = [];
+for (const post of gridPosts) {
+  if (post.postId && existingPosts[post.postId]) {
+    existingSheetPosts.push(post);
+  }
+}
 
-console.log(`🧩 Finished grid scroll. Loaded ${currCount} thumbnails.`);
-
-// 3. Scrape views from grid
-const viewsData = await page.evaluate(() => {
-  const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
-  return posts.map(post => {
-    const href = post.getAttribute('href')?.split('?')[0];
-    const viewEl = post.querySelector('strong[data-e2e="video-views"]');
-    const views = viewEl?.innerText || null;
-    return { href, views };
-  });
+// 3. De-duplicate in case new posts are already in the sheet
+let allToUpdate = {};
+[...taggedNewPosts, ...existingSheetPosts].forEach(post => {
+  if (post && post.postId) allToUpdate[post.postId] = post;
 });
 
-const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
-for (let { href, views } of filteredViewsData) {
-  const match = href.match(/\/(video|photo)\/(\d+)/);
-  const postId = match?.[2];
-  if (!postId || !views) continue;
-
+// 4. Push updates for each post
+for (const postId in allToUpdate) {
+  const post = allToUpdate[postId];
   const rowNumber = existingPosts[postId];
   if (!rowNumber) continue;
+  const postISO = convertPostIdToUnix(postId);
+  const pretty = prettyDate(postISO);
+  const normalizedViews = normalizeViews(post.views);
 
-  console.log(`✅ Updating view count: ${views} for ${href}`);
-  updateQueue.push({ range: `Sheet1!D${rowNumber}`, values: [[views]] });
+  updateQueue.push({
+    range: `Sheet1!D${rowNumber}:F${rowNumber}`,
+    values: [[
+      normalizedViews, // D (views, integer)
+      pretty,          // E
+      postISO          // F
+    ]]
+  });
+  console.log(`✅ Updating (no grid revisit): views=${normalizedViews}, G=${pretty}, H=${postISO} for ${post.href}`);
 }
 
 await updateGoogleSheets();
+return; // Done with this profile
+
+// // 1. Go back to the grid view
+// await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
+// await dismissInterestModal(page);
+// await randomDelay(3000, 6000);
+
+// // PATCH: captcha check right here!
+// if (await isVerificationModalPresent(page) || await isUnableToVerify(page)) {
+//     console.log("🛑 Verification/captcha detected after redirect to profile grid. Closing browser/session and retrying later.");
+//     try { await page.close(); } catch(e) {}
+//     if (page.browser()) {
+//         try { await page.browser().close(); } catch(e) {}
+//     }
+//     if (typeof cleanUpTempProfile === "function") cleanUpTempProfile(page.browser());
+//     return;
+// }
+
+// // 2. Scroll grid until all visible posts are older than 2 months
+// const gridCutoffDate = new Date();
+// gridCutoffDate.setMonth(gridCutoffDate.getMonth() - 2);
+
+// let prevCount = 0;
+// let currCount = 0;
+// let scrollTries = 0;
+// let keepScrolling = true;
+
+// while (keepScrolling && scrollTries < 20) {
+//   prevCount = currCount;
+//   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+//   await randomDelay(3000, 6000);
+
+//   // Get all post links and their post IDs
+//   const postInfo = await page.$$eval('a[href*="/video/"], a[href*="/photo/"]', els =>
+//     els.map(a => {
+//       const href = a.getAttribute('href');
+//       const match = href ? href.match(/\/(video|photo)\/(\d+)/) : null;
+//       return { href: href?.split('?')[0], postId: match?.[2] };
+//     })
+//   );
+//   currCount = postInfo.length;
+
+//   // Convert postId to date and check if any are within cutoff
+//   let foundRecent = false;
+//   for (const { postId } of postInfo) {
+//     if (!postId) continue;
+//     const postDate = convertPostIdToDate(postId); // ← your helper
+//     if (postDate && postDate >= gridCutoffDate) {
+//       foundRecent = true;
+//       break;
+//     }
+//   }
+
+//   // Stop scrolling if no recent posts left, or no new posts loaded
+//   if (!foundRecent || currCount <= prevCount) keepScrolling = false;
+//   scrollTries++;
+// }
+
+// await randomDelay(1200, 1800);
+
+// console.log(`🧩 Finished grid scroll. Loaded ${currCount} thumbnails.`);
+
+// // 3. Scrape views from grid
+// const viewsData = await page.evaluate(() => {
+//   const posts = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]'));
+//   return posts.map(post => {
+//     const href = post.getAttribute('href')?.split('?')[0];
+//     const viewEl = post.querySelector('strong[data-e2e="video-views"]');
+//     const views = viewEl?.innerText || null;
+//     return { href, views };
+//   });
+// });
+
+// const filteredViewsData = viewsData.filter(d => d.href && (d.href.includes('/video/') || d.href.includes('/photo/')));
+// for (let { href, views } of filteredViewsData) {
+//   const match = href.match(/\/(video|photo)\/(\d+)/);
+//   const postId = match?.[2];
+//   if (!postId || !views) continue;
+
+//   const rowNumber = existingPosts[postId];
+//   if (!rowNumber) continue;
+
+//   // --- Get/derive dates ---
+//   const postISO = convertPostIdToUnix(postId); // returns ISO string
+//   const pretty = prettyDate(postISO);
+//   const normalizedViews = normalizeViews(views);
+
+//   // Write to: Col D = normalized views, Col G = pretty date, Col H = ISO
+//   // (Col D = 4th col, G = 7th, H = 8th)
+//   updateQueue.push({ range: `Sheet1!D${rowNumber}:H${rowNumber}`, values: [[
+//     normalizedViews, // D (views, integer)
+//     '', '',          // E, F (keep as-is)
+//     pretty,          // G
+//     postISO          // H
+//   ]]});
+//   console.log(`✅ Updating: views=${normalizedViews}, G=${pretty}, H=${postISO} for ${href}`);
+// }
+
+// await updateGoogleSheets();
 
 }
 
@@ -757,22 +900,31 @@ async function fetchSmartproxyTraffic() {
             }
         }
 
-        // 2️⃣ Get limit from subscription endpoint
+        // 2️⃣ Get limit and (string) usage from subscription endpoint
         const subRes = await fetch(`https://api.smartproxy.com/v2/subscriptions?api-key=${apiKey}`, {
             method: 'GET',
             headers: {
               accept: 'application/json'
             }
-          });                  
+        });                  
         const subs = await subRes.json();
-        console.log("📦 Subscription response:", JSON.stringify(subs, null, 2));
+        //JSON Response from proxy api
+        //console.log("📦 Subscription response:", JSON.stringify(subs, null, 2));
+
+        let usedGB_bytes = +(usedBytes / (1024 ** 3)).toFixed(2); // from bytes endpoint
+        let usedGB_sub = null;
+
         if (Array.isArray(subs) && subs.length > 0) {
             trafficLimit = parseFloat(subs[0].traffic_limit) || 8;
+            usedGB_sub = parseFloat(subs[0].traffic); // subscription API gives string like "8.01"
         } else {
             console.warn("⚠️ Failed to retrieve traffic limit from subscription. Falling back to 8 GB.");
         }
 
-        const usedGB = +(usedBytes / (1024 ** 3)).toFixed(2);
+        let usedGB = usedGB_bytes;
+        if (!isNaN(usedGB_sub)) {
+            usedGB = Math.max(usedGB_bytes, usedGB_sub);
+        }
 
         console.log(`📊 Traffic used this month: ${usedGB} GB / ${trafficLimit} GB`);
         return {
@@ -829,114 +981,244 @@ async function getLastKnownLinks() {
     return normalized;
 }
 
-async function processProfilesChunk(profiles, sheets, prioritizedProfiles, workerId) {
-  
-    // console.log("📥 Fetching profiles from Column U...");
-//     const rangeResponse = await sheets.spreadsheets.values.get({
-//       spreadsheetId: SHEET_ID,
-//       range: 'Sheet1!U2:U'
-//     });
-
-//     console.log("rangeResponse:", JSON.stringify(rangeResponse.data, null, 2));
-
-// if (!rangeResponse.data || !rangeResponse.data.values) {
-//     console.error("❌ No values returned from Sheets. Full response:", JSON.stringify(rangeResponse.data, null, 2));
-//     process.exit(1);
-// }
-
-
-//     const profiles = (rangeResponse.data.values || [])
-//   .flat()
-//   .filter(link =>
-//     typeof link === 'string' &&
-//     link.includes('tiktok.com') &&
-//     link.includes('/@')
-//   )
-//   .map(link => link.trim().replace(/\/$/, ''));
-
-//     if (profiles.length === 0) {
-//       console.warn("⚠️ No TikTok profile URLs found in Column U. Exiting.");
-//       return;
-//     }
-
-//     console.log(`🔍 Found ${profiles.length} profiles to scrape.`);
-
-    const lastKnownMap = await getLastKnownLinks();
-    
+async function processProfilesChunk(
+    profiles,
+    sheets,
+    prioritizedProfileLinks,
+    lastKnownMap,
+    botNumber,
+    totalHigh,
+    totalLow
+) {
     let scrapedCount = 0;
-    let curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
-    let curPage = await curBrowser.newPage();
-
-    // Batch-based browser refresh logic
-    let batchThreshold = Math.floor(Math.random() * 3) + 4; // Random batch size 4–6
     let batchCounter = 0;
+    let batchThreshold = Math.floor(Math.random() * 3) + 4;
+    let highProcessed = 0;
+    let lowProcessed = 0;
 
-for (const profileUrl of profiles) {
-    const cleanProfile = profileUrl.trim().replace(/\/$/, '');
-    const isInprint =
-  cleanProfile.includes('@inprintwetrust') ||
-  cleanProfile.includes('@ipwtstreetalk');
-    const recentLinks = lastKnownMap[cleanProfile] || null;
-    const existingPosts = await refreshExistingPosts();
+    let curBrowser = null;
+    let curPage = null;
+    let useProxy = false;
+    let traffic = null;
+    let isHighPriorityBatch = false;
 
-    let scrapeAttempts = 0;
-let scrapeSuccess = false;
+    for (let i = 0; i < profiles.length; i++) {
+        const profileObj = profiles[i];
+        const profileUrl = profileObj.link;
+        const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+        const isHighPriority = profileObj.isHighPriority;
+        const isLowPriority = profileObj.isLowPriority;
+        const isInprint =
+            cleanProfile.includes('@inprintwetrust') ||
+            cleanProfile.includes('@ipwtstreetalk');
+        const recentLinks = lastKnownMap[cleanProfile] || null;
+        const existingPosts = await refreshExistingPosts();
 
-while (!scrapeSuccess && scrapeAttempts < 3) {
-    // Always create a fresh page for each attempt!
-    if (curPage && typeof curPage.close === "function") {
-        await new Promise(res => setTimeout(res, 10000)); // 10 seconds
-        try { await curPage.close(); } catch (e) {}
-    }
-    curPage = await curBrowser.newPage();
-    await curPage.setViewport({ width: 1200, height: 800 });
-    await curPage.setJavaScriptEnabled(true);
+        // Only check traffic and init browser at the start of a batch, or if no browser yet
+        if (!curBrowser || batchCounter === 0) {
+            if (curBrowser) {
+                try { await curBrowser.close(); } catch (e) { console.warn('Failed to close browser:', e); }
+                if (typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
+            }
+            // Figure out proxy for the batch: use high priority of first profile in batch
+            isHighPriorityBatch = isHighPriority;
+            useProxy = false;
+            if (isHighPriorityBatch) {
+                traffic = await fetchSmartproxyTraffic();
+                const probability = getDynamicProxyChance();
+                useProxy = Math.random() < probability;
+                if (traffic && traffic.used >= 7) {
+                    useProxy = false;
+                    console.log("💸 Smartproxy usage is >= 7GB, skipping proxy use for this batch.");
+                }
+            }
+            curBrowser = await initBrowser(useProxy);
+            batchThreshold = Math.floor(Math.random() * 3) + 4;
+            batchCounter = 0;
+        }
 
-    try {
-        await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets);
-        scrapeSuccess = true;
-    } catch (err) {
-        scrapeAttempts++;
-        console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err && err.message ? err.message : err}`);
-        await new Promise(res => setTimeout(res, Math.floor(Math.random() * 5000) + 7000)); // Wait 7-12s before retry
-    }
-}
+        let scrapeAttempts = 0;
+        let scrapeSuccess = false;
 
-// After 3 failed attempts, optionally close and reopen browser for next profile
-if (!scrapeSuccess) {
-    try { await curBrowser.close(); } catch (e) {}
-    cleanUpTempProfile(curBrowser);
-    curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
-    curPage = await curBrowser.newPage();
-    await curPage.setViewport({ width: 1200, height: 800 });
-    await curPage.setJavaScriptEnabled(true);
-    console.error(`💀 Giving up on profile ${cleanProfile} after 3 tries.`);
-}
+        while (!scrapeSuccess && scrapeAttempts < 3) {
+            try {
+                curPage = await curBrowser.newPage();
+                await curPage.setViewport({ width: 1200, height: 800 });
+                await curPage.setJavaScriptEnabled(true);
+
+                await scrapeProfile(
+                    curPage,
+                    cleanProfile,
+                    {},
+                    existingPosts,
+                    recentLinks,
+                    isInprint,
+                    sheets,
+                    isHighPriority,
+                    isLowPriority
+                );
+
+                scrapeSuccess = true;
+            } catch (err) {
+                scrapeAttempts++;
+                console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err && err.message ? err.message : err}`);
+                // If we hit an error, close browser & force batch restart on this profile next loop
+                try { if (curPage) await curPage.close(); } catch (e) {}
+                try { if (curBrowser) await curBrowser.close(); } catch (e) {}
+                if (curBrowser && typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
+                curBrowser = null;
+                batchCounter = 0;
+                // retry with new browser
+            } finally {
+                try { if (curPage) await curPage.close(); } catch (e) {}
+            }
+        }
+
+        if (!scrapeSuccess) {
+            console.error(`💀 Giving up on profile ${cleanProfile} after 3 tries.`);
+        }
 
         scrapedCount++;
         batchCounter++;
 
-        // Batch-based browser refresh (like in viewScraper)
+        // Progress counters
+        if (isHighPriority) {
+            highProcessed++;
+            console.log(`[BOT${botNumber}] 🔵 (${highProcessed}/${profiles.length}) High-priority: ${cleanProfile}`);
+        } else if (isLowPriority) {
+            lowProcessed++;
+            console.log(`[BOT${botNumber}] 🟠 (${lowProcessed}/${profiles.length}) Low-priority: ${cleanProfile}`);
+        }
+
+        // Batch-based browser refresh after X profiles, unless next is a retry from error
         if (batchCounter >= batchThreshold) {
             console.log('♻️ Restarting browser to refresh session...');
-            try { await curPage.close(); } catch (e) {}
-            try { await curBrowser.close(); } catch (e) {}
-            cleanUpTempProfile(curBrowser);
-            curBrowser = await initBrowser("bulk_run", prioritizedProfiles);
-            curPage = await curBrowser.newPage();
-            await curPage.setViewport({ width: 1200, height: 800 });
-            await curPage.setJavaScriptEnabled(true);
-            batchThreshold = Math.floor(Math.random() * 3) + 4;
+            try { if (curBrowser) await curBrowser.close(); } catch (e) {}
+            if (curBrowser && typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
+            curBrowser = null;
             batchCounter = 0;
         }
     }
 
-    // Cleanup after all profiles
-    try { await curPage.close(); } catch (e) {}
-    try { await curBrowser.close(); } catch (e) {}
-    cleanUpTempProfile(curBrowser);
-    console.log(`[BOT${workerId}] ✅ Finished processing all profiles.`);
+    // Final cleanup
+    try { if (curBrowser) await curBrowser.close(); } catch (e) {}
+    if (curBrowser && typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
 }
+
+// async function processProfilesChunk(profiles, sheets, prioritizedProfiles, workerId, totalHigh, totalLow) {
+//     const lastKnownMap = await getLastKnownLinks();
+
+//     let scrapedCount = 0;
+//     let batchThreshold = Math.floor(Math.random() * 3) + 4; // Random batch size 4–6
+//     let batchCounter = 0;
+
+//     let highProcessed = 0;
+//     let lowProcessed = 0;
+
+// let curBrowser = null;
+// let curPage = null;
+
+// let traffic = await fetchSmartproxyTraffic();
+
+// for (const profileObj of profiles) {
+//     const profileUrl = profileObj.link;
+//     const cleanProfile = profileUrl.trim().replace(/\/$/, '');
+//     const isHighPriority = profileObj.isHighPriority;
+//     const isLowPriority = profileObj.isLowPriority;
+//     const isInprint =
+//         cleanProfile.includes('@inprintwetrust') ||
+//         cleanProfile.includes('@ipwtstreetalk');
+//     const recentLinks = lastKnownMap[cleanProfile] || null;
+//     const existingPosts = await refreshExistingPosts();
+
+//     let scrapeAttempts = 0;
+//     let scrapeSuccess = false;
+
+//     // 🛑 Always close the old browser before starting a new one!
+//     if (curBrowser) {
+//         try { await curBrowser.close(); } catch (e) { console.warn('Failed to close browser:', e); }
+//         if (typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
+//     }
+// let useProxy = false;
+// if (isHighPriority) {
+//     // Always check Smartproxy usage before deciding
+//     traffic = await fetchSmartproxyTraffic();
+//     const probability = getDynamicProxyChance();
+//     useProxy = Math.random() < probability;
+//     if (traffic && traffic.used >= 7) {
+//         useProxy = false;
+//         console.log("💸 Smartproxy usage is >= 7GB, skipping proxy use for this profile.");
+//     }
+// }
+// curBrowser = await initBrowser(useProxy);
+
+//     curPage = await curBrowser.newPage();
+//     await curPage.setViewport({ width: 1200, height: 800 });
+//     await curPage.setJavaScriptEnabled(true);
+
+//     try {
+//         while (!scrapeSuccess && scrapeAttempts < 3) {
+//             if (curPage && typeof curPage.close === "function") {
+//                 await new Promise(res => setTimeout(res, 10000)); // 10 seconds
+//                 try { await curPage.close(); } catch (e) {}
+//             }
+//             curPage = await curBrowser.newPage();
+//             await curPage.setViewport({ width: 1200, height: 800 });
+//             await curPage.setJavaScriptEnabled(true);
+
+//             try {
+//                 await scrapeProfile(curPage, cleanProfile, {}, existingPosts, recentLinks, isInprint, sheets, isHighPriority, isLowPriority);
+//                 scrapeSuccess = true;
+//             } catch (err) {
+//                 scrapeAttempts++;
+//                 console.error(`❌ Error scraping profile: ${cleanProfile} (attempt ${scrapeAttempts}): ${err && err.message ? err.message : err}`);
+//                 await new Promise(res => setTimeout(res, Math.floor(Math.random() * 5000) + 7000)); // Wait 7-12s before retry
+//             }
+//         }
+//         if (!scrapeSuccess) {
+//             console.error(`💀 Giving up on profile ${cleanProfile} after 3 tries.`);
+//         }
+//     } finally {
+//         try { if (curPage) await curPage.close(); } catch (e) {}
+//         // Don't close curBrowser here—let the top of the next loop handle it!
+//         // Only do final cleanup after the loop or on SIGINT/exit.
+//     }
+
+//     scrapedCount++;
+//     batchCounter++;
+
+//     // Progress counters
+//     if (isHighPriority) {
+//         highProcessed++;
+//         console.log(`🔵 [${highProcessed}/${totalHigh}] Finished high-priority profile: ${cleanProfile}`);
+//     } else if (isLowPriority) {
+//         lowProcessed++;
+//         console.log(`🟠 [${lowProcessed}/${totalLow}] Finished low-priority profile: ${cleanProfile}`);
+//     }
+
+//     // Batch-based browser refresh...
+//     if (batchCounter >= batchThreshold) {
+//         console.log('♻️ Restarting browser to refresh session...');
+//         try { if (curPage) await curPage.close(); } catch (e) {}
+//         try { if (curBrowser) await curBrowser.close(); } catch (e) {}
+//         if (curBrowser && typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
+
+//         curBrowser = await initBrowser(isHighPriority);
+//         curPage = await curBrowser.newPage();
+//         await curPage.setViewport({ width: 1200, height: 800 });
+//         await curPage.setJavaScriptEnabled(true);
+//         batchThreshold = Math.floor(Math.random() * 3) + 4;
+//         batchCounter = 0;
+//     }
+// }
+
+// // After all profiles, final cleanup:
+// try { if (curPage) await curPage.close(); } catch (e) {}
+// try { if (curBrowser) await curBrowser.close(); } catch (e) {}
+// if (curBrowser && typeof cleanUpTempProfile === "function") cleanUpTempProfile(curBrowser);
+
+//     console.log(`[BOT${workerId}] ✅ Finished processing all profiles.`);
+// }
 
 async function dismissInterestModal(page) {
   try {
@@ -973,7 +1255,7 @@ async function dismissInterestModal(page) {
     // 1. Fetch all profiles as before
     const rangeResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
-        range: 'Sheet1!U2:U'
+        range: 'Sheet1!V2:Y'
     });
 
     if (!rangeResponse.data || !rangeResponse.data.values) {
@@ -981,28 +1263,57 @@ async function dismissInterestModal(page) {
         process.exit(1);
     }
 
-    const allProfiles = (rangeResponse.data.values || [])
-        .flat()
-        .filter(link =>
-            typeof link === 'string' &&
-            link.includes('tiktok.com') &&
-            link.includes('/@')
-        )
-        .map(link => link.trim().replace(/\/$/, ''));
+    const profileRows = (rangeResponse.data.values || [])
+    .map(row => ({
+        link: typeof row[0] === 'string' ? row[0].trim().replace(/\/$/, '') : '',
+        isHighPriority: ((row[1] || '').toString().toUpperCase() === 'TRUE'),
+        isLowPriority:  ((row[2] || '').toString().toUpperCase() === 'TRUE'),
+        isFinished:     ((row[3] || '').toString().toUpperCase() === 'TRUE')
+    }))
+    .filter(profile =>
+        profile.link &&
+        profile.link.includes('tiktok.com') &&
+        profile.link.includes('/@') &&
+        !profile.isFinished &&
+        (profile.isHighPriority || profile.isLowPriority)
+    );
 
-    if (allProfiles.length === 0) {
+const highPriority = profileRows.filter(p => p.isHighPriority);
+const lowPriority  = profileRows.filter(p => p.isLowPriority);
+const sortedProfiles = highPriority.concat(lowPriority);
+
+const prioritizedProfileLinks = new Set(highPriority.map(p => p.link));
+
+console.log(`🔵 High-priority profiles to scrape: ${highPriority.length}`);
+console.log(`🟠 Low-priority profiles to scrape: ${lowPriority.length}`);
+
+    if (profileRows.length === 0) {
         console.warn("⚠️ No TikTok profile URLs found. Exiting.");
         return;
     }
 
+    const lastKnownMap = await getLastKnownLinks();
+
     // 2. Split into 3 chunks
     const numBots = 5;
-    const chunks = splitArrayIntoChunks(allProfiles, numBots);
+    const chunks = splitArrayIntoChunks(sortedProfiles, numBots);
 
     // 3. Run all bots in parallel
-    await Promise.all(
-        chunks.map((chunk, idx) => processProfilesChunk(chunk, sheets, prioritizedProfiles, idx + 1))
-    );
-
+// await Promise.all(
+//   chunks.map((chunk, idx) => processProfilesChunk(chunk, sheets, prioritizedProfileLinks, idx + 1, highPriority.length, lowPriority.length))
+// );
+await Promise.all(
+  chunks.map((chunk, idx) =>
+    processProfilesChunk(
+      chunk,
+      sheets,
+      prioritizedProfileLinks,
+      lastKnownMap,
+      idx + 1,
+      highPriority.length,
+      lowPriority.length
+    )
+  )
+);
     console.log("✅ All bots finished scraping!");
 })();

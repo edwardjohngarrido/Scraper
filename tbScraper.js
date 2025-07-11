@@ -797,25 +797,35 @@ return; // Done with this profile
 
 }
 
-async function refreshExistingPosts() {
-    const sheets = await initSheets();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:D',
-    });
-  
-    let result = {};
-    response.data.values.forEach((row, index) => {
-      const link = row[2];
-      if (link) {
-        const match = link.match(/\/(video|photo)\/(\d+)/);
-        if (match) result[match[2]] = index + 1;
-      }
-    });
-  
-    return result;
+async function refreshExistingPosts(retries = 5, delay = 1000) {
+  const sheets = await initSheets();
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: 'Sheet1!A:D',
+      });
+
+      let result = {};
+      response.data.values.forEach((row, index) => {
+        const link = row[2];
+        if (link) {
+          const match = link.match(/\/(video|photo)\/(\d+)/);
+          if (match) result[match[2]] = index + 1;
+        }
+      });
+
+      return result;
+
+    } catch (err) {
+      console.error(`⚠️ Failed to fetch existing posts (attempt ${attempt}): ${err.message}`);
+      if (attempt === retries) throw err;
+      await new Promise(resolve => setTimeout(resolve, delay * attempt));
+    }
   }
-  
+}
+
 
 async function updateGoogleSheets() {
     if (updateQueue.length === 0) {

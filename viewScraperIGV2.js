@@ -4,19 +4,26 @@ import 'dotenv/config';
 
 // ==== CONFIG =====
 const SHEET_ID = '19DsWqJW09VxMfNojPH9mnGJ4MCQl7m3Ud3LNLkn-Ag4';
-const SHEET_NAME = 'General History Matrix';
+const SHEET_NAME = 'History Matrix';
 const APIFY_TOKEN = process.env.APIFY_TOKEN;
 const APIFY_ACTOR_ID = process.env.APIFY_ACTOR_ID; // apify/instagram-scraper
 const CREDENTIALS_PATH = './credentials.json';
 
 // ==== HELPERS ====
-function parseDateMMDDYYYY(s) {
+function parseDateFlexible(s) {
   if (!s) return null;
+  // Try YYYY-MM-DD or ISO
+  const isoDate = new Date(s);
+  if (!isNaN(isoDate.getTime())) return isoDate;
+
+  // Try MM/DD/YYYY as fallback
   const parts = s.split('/');
-  if (parts.length !== 3) return null;
-  let [m, d, y] = parts.map(Number);
-  if (y < 1000) [d, m, y] = parts.map(Number); // fallback for weird data
-  return new Date(y, m - 1, d);
+  if (parts.length === 3) {
+    let [m, d, y] = parts.map(Number);
+    if (y < 1000) [d, m, y] = parts.map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return null;
 }
 
 function daysAgo(date) {
@@ -59,7 +66,7 @@ async function getSheetsClient() {
     ];
     if (!dateStr || !profileUrl || !postUrl) continue;
 
-    const dateObj = parseDateMMDDYYYY(dateStr);
+    const dateObj = parseDateFlexible(dateStr);
     if (!dateObj || daysAgo(dateObj) > 14) continue;
 
     const chType = (channelType || '').trim().toLowerCase();

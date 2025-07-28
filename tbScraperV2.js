@@ -343,6 +343,7 @@ async function scrapeProfile(page, profileUrl, lastKnownLink, isInprint, sheets,
     // Only keep posts within 14 days and that match your tag (unless isInprint)
     const now = Date.now();
     const msCutoff = now - 14 * 24 * 60 * 60 * 1000;
+    const scrapeDate = new Date(now);
 
     let updateCount = 0, appendCount = 0;
     for (const post of posts) {
@@ -366,13 +367,13 @@ async function scrapeProfile(page, profileUrl, lastKnownLink, isInprint, sheets,
         if (postUrlToRow[href]) {
             const rowNum = postUrlToRow[href];
             updateQueue.push({
-                range: `Sheet1!D${rowNum}:F${rowNum}`,
-                values: [[normalizedViews, pretty, postDate.toISOString()]]
+                range: `Sheet1!D${rowNum}:G${rowNum}`,
+                values: [[normalizedViews, pretty, postDate.toISOString(), scrapeDate]]
             });
             updateCount++;
             console.log(`   [${profileUrl}] 🔄 Updating post (existing): ${href} — views: ${normalizedViews}, date: ${pretty}`);
         } else {
-            newRows.push([href, normalizedViews, pretty, postDate.toISOString()]);
+            newRows.push([href, normalizedViews, pretty, postDate.toISOString(), scrapeDate]);
             appendCount++;
             console.log(`   [${profileUrl}] ➕ Appending new post: ${href} — views: ${normalizedViews}, date: ${pretty}`);
         }

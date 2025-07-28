@@ -274,7 +274,7 @@ async function scrapeProfile(page, profileUrl, lastKnownLink, isInprint, sheets,
     let foundGrid = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
         await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await randomDelay(2800, 4500);
+        await randomDelay(3500, 6000);
         try {
            await page.waitForSelector('div[data-e2e="user-post-item"]', { timeout: 20000 });
             foundGrid = true;
@@ -282,7 +282,7 @@ async function scrapeProfile(page, profileUrl, lastKnownLink, isInprint, sheets,
         } catch {
             console.error(`❌ No grid found for ${profileUrl} (attempt ${attempt}/3)`);
             if (attempt < 3) {
-                await randomDelay(2500, 4500);
+                await randomDelay(3500, 6000);
                 // Optionally: page.reload() here, but re-goto is fine
             }
         }

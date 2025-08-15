@@ -112,43 +112,73 @@ async function loadSheet1IGShortCodes(sheets) {
     return new Set((data.values || []).flat().map(getIGShortCode).filter(Boolean));
 }
 
+function buildHistoryIndex(historyRows) {
+  // History Matrix columns:
+  // A: date (YYYY-MM-DD), B: profile link, C: post link, D: RevStream, E: views
+  const tt = new Map();   // TikTok: postId -> { rowNum, type, profile, createdDate, postUrl }
+  const ig = new Map();   // IG: shortCode -> { rowNum, type, profile, createdDate, postUrl }
+
+  historyRows.forEach((row, i) => {
+    const createdDate = row[0] || '';
+    const profile = row[1] || '';
+    const postUrl = row[2] || '';
+    const type = (row[3] || '').toLowerCase();
+    const rowNum = i + 2; // sheet row
+
+    if (/tiktok\.com\/@[^/]+\/(video|photo)\/\d+/.test(postUrl)) {
+      const id = getTiktokPostId(postUrl);
+      if (id) tt.set(id, { rowNum, type, profile, createdDate, postUrl });
+    }
+
+    if (/instagram\.com\/(p|reel|tv)\/[^/]+/.test(postUrl)) {
+      const sc = getIGShortCode(postUrl);
+      if (sc) ig.set(sc, { rowNum, type, profile, createdDate, postUrl });
+    }
+  });
+
+  return { tt, ig };
+}
+
 
 // === BUILD JOBS ===
 function buildJobs(historyRows, windowDays) {
-    const tiktokOrganicOrGiftedPosts = [];
-    const tiktokTbIpwtProfiles = new Set();
+  const cutoff = new Date(daysAgoIso(windowDays));
+  const tiktokOrganicOrGiftedPosts = [];
+  const tiktokTbIpwtProfiles = new Set();
+  const igOrganicOrGiftedPosts = [];
+  const igTbIpwtProfiles = new Set();
 
-    const igOrganicOrGiftedPosts = [];
-    const igTbIpwtProfiles = new Set();
+  historyRows.forEach(row => {
+    const [date, profile, postUrl, type] = row;
+    if (!profile || !postUrl || !date) return;
+    const createdAt = new Date(date);
+    const lowerType = (type || '').toLowerCase();
 
-    historyRows.forEach(row => {
-        const [date, profile, postUrl, type, views] = row;
-        if (!profile || !postUrl) return;
-        const lowerType = type ? type.toLowerCase() : '';
-        // TikTok logic
-        if (profile.includes('tiktok.com')) {
-            if (lowerType === 'trailblazer' || lowerType === 'ipwt') {
-                tiktokTbIpwtProfiles.add(profile);
-            } else if (new Date(date) > new Date(daysAgoIso(windowDays))) {
-                tiktokOrganicOrGiftedPosts.push({ profile, postUrl, row });
-            }
-        }
-        // IG logic
-        if (profile.includes('instagram.com')) {
-            if (lowerType === 'trailblazer' || lowerType === 'ipwt') {
-                igTbIpwtProfiles.add(profile);
-            } else if (new Date(date) > new Date(daysAgoIso(windowDays))) {
-                igOrganicOrGiftedPosts.push({ profile, postUrl, row });
-            }
-        }
-    });
+    // TikTok
+    if (profile.includes('tiktok.com')) {
+      if (lowerType === 'trailblazer' || lowerType === 'ipwt') {
+        if (createdAt >= cutoff) tiktokTbIpwtProfiles.add(profile);
+      } else if (createdAt >= cutoff) {
+        tiktokOrganicOrGiftedPosts.push({ profile, postUrl, row });
+      }
+    }
 
-    return {
-        tiktokOrganicOrGiftedPosts,
-        tiktokTbIpwtProfiles: Array.from(tiktokTbIpwtProfiles),
-        igOrganicOrGiftedPosts,
-        igTbIpwtProfiles: Array.from(igTbIpwtProfiles),
-    };
+    // Instagram
+    if (profile.includes('instagram.com')) {
+      if (lowerType === 'trailblazer' || lowerType === 'ipwt') {
+        if (createdAt >= cutoff) igTbIpwtProfiles.add(profile);
+      } else if (createdAt >= cutoff) {
+        igOrganicOrGiftedPosts.push({ profile, postUrl, row });
+      }
+    }
+  });
+
+  return {
+    tiktokOrganicOrGiftedPosts,
+    tiktokTbIpwtProfiles: Array.from(tiktokTbIpwtProfiles),
+    igOrganicOrGiftedPosts,
+    igTbIpwtProfiles: Array.from(igTbIpwtProfiles),
+  };
 }
 
 // === SCRAPE TIKTOK/IG VIA APIFY ===
@@ -226,6 +256,9 @@ async function appendToSheet1(sheets, rows, colStart) {
 (async () => {
     const sheets = await getSheetsClient();
     const historyRows = await loadHistoryMatrix(sheets);
+    const historyIndex = buildHistoryIndex(historyRows);
+    // quick helpers
+    const isTBorIPWT = (rev) => rev === 'trailblazer' || rev === 'ipwt';
     const windowDays = 30;
     const sinceDate = daysAgoIso(windowDays);
 
@@ -321,6 +354,8 @@ await batchUpdateHistoryMatrix(sheets, updateBatch);
       // Update only views in column D
       ttViewUpdates.push({ range: `${SHEET1}!D${existingRow}`, values: [[views]] });
     } else {
+      const tagType = (historyIndex.tt.get(postId)?.type || '').toLowerCase();
+      if (!isTBorIPWT(tagType)) continue;
       // Append B:F = [profileLink, postLink, views, prettyDate, createdDatetime]
       const username =
         post.authorUsername || post.username || post.ownerUsername ||
@@ -367,6 +402,75 @@ if (ttAppendRows.length) {
 }
 
 }
+
+// === TikTok: TB/IPWT discovery pass (profiles) ===
+// Find NEW posts within 14 days that tag us, not in History Matrix, and append to Sheet1 B:F
+const TIKTOK_TAGS = [
+  "@In Print We Trust", "@in print we trust", "@InPrintWeTrust", "@inprintwetrust",
+  "@inprintwetrust.co", "@InPrintWeTrust.co", "#InPrintWeTrust", "#inprintwetrust",
+  "#IPWT", "#ipwt"
+];
+
+// scrape recent from TB/IPWT profiles (you already date-gated the set in buildJobs)
+const tiktokProfileResults = await scrapeTiktokProfiles(tiktokTbIpwtProfiles, daysAgoIso(14), TIKTOK_TAGS);
+
+// Build Sheet1 TT id set if not already in memory
+// (you already have sheet1TiktokPostIds in memory above)
+
+const newTTAppends = [];
+for (const post of tiktokProfileResults) {
+  const url = post.webVideoUrl || post.url || '';
+  const postId = getTiktokPostId(url);
+  if (!postId) continue;
+
+  // must be tagged (caption contains any tag)
+  const caption = (post.text || '').toLowerCase();
+  const isTagged = TIKTOK_TAGS.some(tag => caption.includes(tag.toLowerCase()));
+  if (!isTagged) continue;
+
+  // Skip if already tracked in matrix
+  if (historyIndex.tt.has(postId)) continue;
+  // Skip if already in Sheet1
+  if (sheet1TiktokPostIds.has(postId)) continue;
+
+  // Construct Sheet1 B:F row
+  const username =
+    post.authorUsername || post.username || post.ownerUsername ||
+    ((url.match(/tiktok\.com\/@([^\/]+)/) || [,''])[1]);
+  const profileLink = username ? `https://www.tiktok.com/@${username}` : '';
+
+  const views = post.playCount ?? post.viewCount ?? post.views ?? '';
+  const rawCreated = post.createTime ?? post.createDate ?? post.timestamp ?? post.createTimestamp ?? '';
+  const createdMs = typeof rawCreated === 'number'
+    ? (rawCreated < 1e12 ? rawCreated * 1000 : rawCreated)
+    : Date.parse(rawCreated);
+  const pretty = isNaN(createdMs)
+    ? ''
+    : new Date(createdMs).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const createdIso = isNaN(createdMs) ? '' : new Date(createdMs).toISOString();
+
+  newTTAppends.push([profileLink, url, views, pretty, createdIso]);
+  postsAppended.add(postId);
+}
+
+// append any newly found TT posts (TB/IPWT discovery)
+if (newTTAppends.length) {
+  const existingTT = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET1}!B:F`,
+  });
+  const used = (existingTT.data.values || []).length;
+  const startRow = Math.max(2, used + 1);
+  const endRow = startRow + newTTAppends.length - 1;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET1}!B${startRow}:F${endRow}`,
+    valueInputOption: 'RAW',
+    resource: { values: newTTAppends },
+  });
+}
+
 
     // === Instagram: Organic/Gifted ===
     // Set your desired window, e.g., 14 for two weeks
@@ -439,6 +543,87 @@ const igDirectResults = await scrapeInstagramDirectPosts(matrixIGLinks);
       resource: { valueInputOption: 'RAW', data: igSheet1Updates },
     });
   }
+}
+
+// === Instagram: Matrix -> Sheet1 sync for TB/IPWT (last 14 days) ===
+const igMatrixWindowDays = 14;
+const igMatrixCutoff = new Date();
+igMatrixCutoff.setDate(igMatrixCutoff.getDate() - igMatrixWindowDays);
+
+// Map scraped direct results for quick lookup
+const igByShort = new Map(
+  igDirectResults
+    .map(p => [getIGShortCode(p.url || p.postUrl), p])
+    .filter(([k]) => !!k)
+);
+
+// Build Sheet1 shortCode map from Col N
+const sheet1IGLinks = await sheets.spreadsheets.values.get({
+  spreadsheetId: SHEET_ID, range: `${SHEET1}!N2:N`,
+});
+const sheet1IGMap = new Map();
+(sheet1IGLinks.data.values || []).forEach((row, i) => {
+  const link = (row[0] || '').trim();
+  const sc = getIGShortCode(link);
+  if (sc) sheet1IGMap.set(sc, i + 2);
+});
+
+const igMatrixToSheetAppends = [];
+
+for (const row of historyRows) {
+  const createdStr = row[0] || '';
+  const profileLink = row[1] || '';
+  const postUrl = row[2] || '';
+  const revStream = (row[3] || '').toLowerCase();
+
+  // Only IG posts with TB/IPWT revStream in last 14 days
+  if (!/instagram\.com\/(p|reel|tv)\//.test(postUrl)) continue;
+  if (!(revStream === 'trailblazer' || revStream === 'ipwt')) continue;
+  if (!createdStr) continue;
+
+  const createdAt = new Date(createdStr);
+  if (createdAt < igMatrixCutoff) continue;
+
+  const sc = getIGShortCode(postUrl);
+  if (!sc) continue;
+
+  // Skip if already in Sheet1
+  if (sheet1IGMap.has(sc)) continue;
+
+  // Use scraped views if available
+  const scrapedPost = igByShort.get(sc);
+  const views = scrapedPost ? (scrapedPost.videoPlayCount ?? scrapedPost.views ?? '') : '';
+
+  // Build row for M:Q
+  const ownerUsername = scrapedPost?.ownerUsername || '';
+  const finalProfileLink = ownerUsername
+    ? `https://www.instagram.com/${ownerUsername}/reels`
+    : profileLink;
+
+  const timestamp = scrapedPost?.timestamp || createdStr;
+  const prettyDate = timestamp
+    ? new Date(timestamp).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    : '';
+
+  igMatrixToSheetAppends.push([finalProfileLink, postUrl, views, prettyDate, timestamp]);
+}
+
+if (igMatrixToSheetAppends.length) {
+  const existingIG = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET1}!M:Q`,
+  });
+  const used = (existingIG.data.values || []).length;
+  const startRow = Math.max(2, used + 1);
+  const endRow = startRow + igMatrixToSheetAppends.length - 1;
+
+  console.log(`[IG] Matrix->Sheet1 TB/IPWT appends: ${igMatrixToSheetAppends.length}`);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET1}!M${startRow}:Q${endRow}`,
+    valueInputOption: 'RAW',
+    resource: { values: igMatrixToSheetAppends },
+  });
 }
 
 // === Instagram: TB/IPWT profiles ===

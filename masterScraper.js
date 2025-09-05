@@ -1,11 +1,8 @@
-'use strict';
-
-// (optional) load .env if you use it locally
-try { require('dotenv').config(); } catch (_) {}
-
-const { Client: PgClient } = require('pg');
-const { ApifyClient } = require('apify-client');
-const { google } = require('@googleapis/sheets');
+// masterScraper.js
+import { ApifyClient } from 'apify-client';
+import { google } from 'googleapis';
+import { Client as PgClient } from 'pg';
+import 'dotenv/config';
 
 // ---------- config ----------
 const APIFY_TOKEN            = process.env.APIFY_TOKEN;

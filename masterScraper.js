@@ -1,4 +1,9 @@
-// masterScraper.js
+// masterScraper.js — batched + no hard limit + 14‑day direct-post window
+// - Removes the hard LIMIT 2000 (configurable MAX_TO_SCRAPE; 0 = unlimited)
+// - Processes direct-post scraping in chunks (SCRAPE_CHUNK)
+// - Enforces a recency window for *direct posts* from DB via DIRECT_POST_WINDOW_DAYS
+// - Keeps PROFILE_DISCOVERY_DAYS for TB/IPWT profile discovery (Apify inputs) and adds an extra JS-side filter
+
 import { ApifyClient } from 'apify-client';
 import { google } from 'googleapis';
 import { Client as PgClient } from 'pg';
@@ -10,24 +15,31 @@ import 'dotenv/config';
 /* =========================
    CONFIG
    ========================= */
-const APIFY_TOKEN            = process.env.APIFY_TOKEN;
-const TIKTOK_ACTOR_ID        = process.env.APIFY_TIKTOK_ACTOR_ID;
-const INSTAGRAM_ACTOR_ID     = process.env.APIFY_ACTOR_INSTAGRAM_ID || process.env.APIFY_ACTOR_ID; // support “original”
+const APIFY_TOKEN                = process.env.APIFY_TOKEN;
+const TIKTOK_ACTOR_ID            = process.env.APIFY_TIKTOK_ACTOR_ID;
+const INSTAGRAM_ACTOR_ID         = process.env.APIFY_ACTOR_INSTAGRAM_ID || process.env.APIFY_ACTOR_ID; // support “original”
 
-const DB_HOST                = process.env.DB_HOST || '127.0.0.1';
-const DB_PORT                = Number(process.env.DB_PORT || 5432);
-const DB_NAME                = process.env.DB_NAME || 'prod';
-const DB_USER                = process.env.DB_USER || 'vm_user';
-const DB_PASSWORD            = process.env.DB_PASSWORD || '';
-const DB_SSLMODE             = (process.env.DB_SSLMODE || 'require').toLowerCase();
+const DB_HOST                    = process.env.DB_HOST || '127.0.0.1';
+const DB_PORT                    = Number(process.env.DB_PORT || 5432);
+const DB_NAME                    = process.env.DB_NAME || 'prod';
+const DB_USER                    = process.env.DB_USER || 'vm_user';
+const DB_PASSWORD                = process.env.DB_PASSWORD || '';
+const DB_SSLMODE                 = (process.env.DB_SSLMODE || 'require').toLowerCase();
 
-const SHEET_ID               = process.env.INFLUENCER_TRACKER_SHEET;
-const SHEET_TAB              = process.env.GOOGLE_SHEETS_RANGE || 'History Matrix';
+const SHEET_ID                   = process.env.INFLUENCER_TRACKER_SHEET;
+const SHEET_TAB                  = process.env.GOOGLE_SHEETS_RANGE || 'History Matrix';
 
-const TEST5                  = process.argv.includes('--test5') || process.env.SCRAPER_TEST_TIKTOK_5 === '1';
+const TEST5                      = process.argv.includes('--test5') || process.env.SCRAPER_TEST_TIKTOK_5 === '1';
 
 // discovery window (days) for TB/IPWT profile scrape
-const PROFILE_DISCOVERY_DAYS = Number(process.env.PROFILE_DISCOVERY_DAYS || 14);
+const PROFILE_DISCOVERY_DAYS     = Number(process.env.PROFILE_DISCOVERY_DAYS || 14);
+// recency window (days) for *direct posts* pulled from DB
+const DIRECT_POST_WINDOW_DAYS    = Number(process.env.DIRECT_POST_WINDOW_DAYS || 14);
+
+// batching controls
+const MAX_TO_SCRAPE              = Number(process.env.MAX_TO_SCRAPE || 0);   // 0 = unlimited
+const SCRAPE_CHUNK               = Number(process.env.SCRAPE_CHUNK || 300);   // per-platform batch size
+const SLEEP_BETWEEN_BATCHES_MS   = Number(process.env.SLEEP_BETWEEN_BATCHES_MS || 0);
 
 // tag filters (used for profile discovery)
 const TAGS_CANON = [
@@ -48,8 +60,8 @@ function canonLink(url) {
   if (!url) return null;
   let s = String(url).trim();
   s = s.replace(/\?[^#]*$/, '');
-  s = s.replace(/#.*$/, '');
-  s = s.replace(/\/+$/, '');
+  s = s.replace(/#.*/, '');
+  s = s.replace(/\/+$, '');
   return s || null;
 }
 function firstNumber(...xs) {
@@ -70,19 +82,13 @@ function currentSlotUTC() {
   const m = now.getUTCMonth();
   const d = now.getUTCDate();
   const h = now.getUTCHours();
-  let slotHour;
-  let y2 = y, m2 = m, d2 = d;
-
-  if (h < 7) {
-    const prev = new Date(Date.UTC(y, m, d)); prev.setUTCDate(prev.getUTCDate() - 1);
-    y2 = prev.getUTCFullYear(); m2 = prev.getUTCMonth(); d2 = prev.getUTCDate();
-    slotHour = 19;
+  let slotHour; let y2 = y, m2 = m, d2 = d;
+  if (h < 7) { const prev = new Date(Date.UTC(y, m, d)); prev.setUTCDate(prev.getUTCDate() - 1); y2 = prev.getUTCFullYear(); m2 = prev.getUTCMonth(); d2 = prev.getUTCDate(); slotHour = 19;
   } else if (h < 13) slotHour = 7;
-  else if (h < 19)  slotHour = 13;
-  else              slotHour = 19;
-
+    else if (h < 19) slotHour = 13;
+    else slotHour = 19;
   const slotStart = new Date(Date.UTC(y2, m2, d2, slotHour, 0, 0));
-  const slotLabel = slotStart.toISOString().replace('.000Z', 'Z'); // YYYY-MM-DDTHH:MM:SSZ
+  const slotLabel = slotStart.toISOString().replace('.000Z', 'Z');
   return { slotStart, slotLabel };
 }
 
@@ -103,7 +109,7 @@ function tiktokIsTagged(item) {
 // Instagram helpers (shortCode-first)
 function getIGShortCode(url) {
   if (!url) return '';
-  const m = url.match(/\/(p|reel|tv)\/([^/?#]+)(?:[/?#]|$)/);
+  const m = url.match(/\/(p|reel|tv)\/([^\/?#]+)(?:[\/?#]|$)/);
   return m ? m[2] : '';
 }
 function getIGShortCodeFromResult(item) {
@@ -121,15 +127,25 @@ function igIsTagged(item) {
   return TAGS_CANON.some(t => haystack.includes(t.toLowerCase()));
 }
 
+function chunk(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+function coerceMs(ts) {
+  if (ts == null) return NaN;
+  if (typeof ts === 'number') return ts < 1e12 ? ts * 1000 : ts; // handle seconds vs ms
+  const n = Date.parse(ts);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 /* =========================
    POSTGRES
    ========================= */
 function pgClient() {
   const ssl = DB_SSLMODE === 'disable' ? false : { rejectUnauthorized: false };
-  return new PgClient({
-    host: DB_HOST, port: DB_PORT, database: DB_NAME,
-    user: DB_USER, password: DB_PASSWORD, ssl
-  });
+  return new PgClient({ host: DB_HOST, port: DB_PORT, database: DB_NAME, user: DB_USER, password: DB_PASSWORD, ssl });
 }
 
 async function ensureHistoryTables(pg) {
@@ -187,7 +203,7 @@ async function refreshHistoryMVs(pg, nSlots = 90) {
   await pg.query(`SELECT analytics.rebuild_history_matrix_wide($1);`, [nSlots]);
 }
 
-/** Pick posts to scrape (DB → history posts / or test5) */
+/** Pick posts to scrape (DB → history posts / or test5). Respects DIRECT_POST_WINDOW_DAYS. */
 async function selectPostsToScrape(pg) {
   if (TEST5) {
     const q = `
@@ -204,6 +220,7 @@ async function selectPostsToScrape(pg) {
     return rows;
   }
 
+  const limitClause = MAX_TO_SCRAPE > 0 ? `LIMIT ${MAX_TO_SCRAPE}` : '';
   const q = `
     WITH latest_slot AS (
       SELECT COALESCE(max(slot_start), '1970-01-01'::timestamptz) AS s
@@ -225,8 +242,10 @@ async function selectPostsToScrape(pg) {
       ON m.post_link = h.post_link AND m.slot_start = ls.s
     WHERE (m.post_link IS NULL)
       AND h.post_link IS NOT NULL
+      AND h.created_at_date IS NOT NULL
+      AND h.created_at_date >= CURRENT_DATE - INTERVAL '${DIRECT_POST_WINDOW_DAYS} days'
     ORDER BY h.created_at_date DESC
-    LIMIT 2000;
+    ${limitClause};
   `;
   const { rows } = await pg.query(q);
   return rows;
@@ -246,8 +265,7 @@ async function selectTbIpwtProfiles(pg, days) {
     `,
     [since]
   );
-  const tt = [];
-  const ig = [];
+  const tt = []; const ig = [];
   for (const r of rows) {
     const p = String(r.profile_link || '');
     if (p.includes('tiktok.com/')) tt.push(p);
@@ -266,27 +284,19 @@ function resolveCredentialsPath() {
     path.resolve(process.cwd(), 'credentials.json'),
     path.resolve(__dirname, 'credentials.json'),
   ].filter(Boolean);
-  for (const p of candidates) { try { if (p && fs.existsSync(p)) return p; } catch {}
-  }
+  for (const p of candidates) { try { if (p && fs.existsSync(p)) return p; } catch { /* noop */ } }
   return null;
 }
 function getGoogleAuth() {
   const keyFile = resolveCredentialsPath();
   if (keyFile) {
     console.log(`Sheets: using credentials file → ${keyFile}`);
-    return new google.auth.GoogleAuth({
-      keyFile,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets']
-    });
+    return new google.auth.GoogleAuth({ keyFile, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   }
   if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
     const key = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
     console.log(`Sheets: using inline service account from env.`);
-    return new google.auth.JWT({
-      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      key,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets']
-    });
+    return new google.auth.JWT({ email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, key, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   }
   throw new Error('Google auth not configured. Provide credentials.json or service-account env vars.');
 }
@@ -303,34 +313,19 @@ async function findSheetIdByTitle(sheets, title) {
 }
 async function ensureSheetSlotColumn(sheets, slotLabel) {
   const sheetId = await findSheetIdByTitle(sheets, SHEET_TAB);
-  const headerResp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_TAB}!A1:ZZ1`
-  });
+  const headerResp = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET_TAB}!A1:ZZ1` });
   const header = headerResp.data.values?.[0] || [];
   const existingIndex = header.findIndex(v => String(v).trim() === slotLabel);
   if (existingIndex >= 0) return existingIndex + 1;
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: SHEET_ID,
-    requestBody: {
-      requests: [
-        { insertDimension: { range: { sheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 }, inheritFromBefore: false } }
-      ]
-    }
+    requestBody: { requests: [ { insertDimension: { range: { sheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 }, inheritFromBefore: false } } ] }
   });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_TAB}!E1`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [[slotLabel]] }
-  });
+  await sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `${SHEET_TAB}!E1`, valueInputOption: 'RAW', requestBody: { values: [[slotLabel]] } });
   return 5; // column E
 }
 async function buildSheetRowMap(sheets) {
-  const resp = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_TAB}!C2:C`
-  });
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET_TAB}!C2:C` });
   const rows = resp.data.values || [];
   const map = new Map();
   for (let i = 0; i < rows.length; i++) {
@@ -345,9 +340,9 @@ function colIndex1bToA1(idx1b) {
   while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
   return s;
 }
-async function writeViewsToSheet(sheets, colIndex1b, snapshots) {
+async function writeViewsToSheet(sheets, colIndex1b, snapshots, prebuiltRowMap) {
   if (!SHEET_ID) return;
-  const rowMap = await buildSheetRowMap(sheets);
+  const rowMap = prebuiltRowMap || await buildSheetRowMap(sheets);
   const updates = [];
   for (const s of snapshots) {
     const link = canonLink(s.post_link);
@@ -358,10 +353,7 @@ async function writeViewsToSheet(sheets, colIndex1b, snapshots) {
     updates.push({ range: `${SHEET_TAB}!${colA1}${row}`, values: [[Number.isFinite(Number(s.views)) ? Number(s.views) : '']] });
   }
   if (!updates.length) { console.log('Sheets: no matching rows to update.'); return; }
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: SHEET_ID,
-    requestBody: { valueInputOption: 'RAW', data: updates }
-  });
+  await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { valueInputOption: 'RAW', data: updates } });
   console.log(`Sheets: updated ${updates.length} cells in column ${colIndex1bToA1(colIndex1b)}.`);
 }
 
@@ -381,29 +373,20 @@ async function sheet1IGShortSet(sheets) {
 async function sheetAppendRows(sheets, startCol, rows) {
   if (!rows.length) return;
   // find next empty row in target block
-  const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `Sheet1!${startCol}:${String.fromCharCode(startCol.charCodeAt(0)+4)}` });
+  const endCol = String.fromCharCode(startCol.charCodeAt(0)+4);
+  const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `Sheet1!${startCol}:${endCol}` });
   const used = (data.values || []).length;
   const startRow = Math.max(2, used + 1);
   const endRow = startRow + rows.length - 1;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `Sheet1!${startCol}${startRow}:${String.fromCharCode(startCol.charCodeAt(0)+4)}${endRow}`,
-    valueInputOption: 'RAW',
-    resource: { values: rows }
-  });
+  await sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `Sheet1!${startCol}${startRow}:${endCol}${endRow}`, valueInputOption: 'RAW', resource: { values: rows } });
 }
 
 /* =========================
    APIFY (original input shapes)
    ========================= */
-function apify() {
-  if (!APIFY_TOKEN) throw new Error('APIFY_TOKEN missing.');
-  return new ApifyClient({ token: APIFY_TOKEN });
-}
+function apify() { if (!APIFY_TOKEN) throw new Error('APIFY_TOKEN missing.'); return new ApifyClient({ token: APIFY_TOKEN }); }
 async function fetchAllDatasetItems(client, datasetId) {
-  let items = [];
-  let offset = 0;
-  const limit = 5000;
+  let items = []; let offset = 0; const limit = 5000;
   while (true) {
     const resp = await client.dataset(datasetId).listItems({ clean: true, offset, limit });
     items = items.concat(resp.items || []);
@@ -427,18 +410,9 @@ async function scrapeTiktokDirectPosts(postUrls) {
 // TikTok: profiles -> { profiles:[usernames], captionKeywords, ... }
 async function scrapeTiktokProfiles(profileLinks, captionKeywords = [], windowUnified = '30 days') {
   if (!profileLinks.length || !TIKTOK_ACTOR_ID) return [];
-  const cleaned = profileLinks.map(url => {
-    let username = (url.split('/').filter(Boolean).pop() || '').trim();
-    if (username.startsWith('@')) username = username.slice(1);
-    return username;
-  }).filter(Boolean);
+  const cleaned = profileLinks.map(url => { let username = (url.split('/').filter(Boolean).pop() || '').trim(); if (username.startsWith('@')) username = username.slice(1); return username; }).filter(Boolean);
   const client = apify();
-  const input = {
-    profiles: cleaned,
-    captionKeywords,
-    profileSorting: 'latest',
-    oldestPostDateUnified: windowUnified,
-  };
+  const input = { profiles: cleaned, captionKeywords, profileSorting: 'latest', oldestPostDateUnified: windowUnified };
   console.log(`Apify TT (profiles): ${cleaned.length} profiles via key profiles`);
   const run = await client.actor(TIKTOK_ACTOR_ID).call(input);
   console.log(`Apify TT runId=${run.id} datasetId=${run.defaultDatasetId} status=${run.status}`);
@@ -461,14 +435,7 @@ async function scrapeInstagramDirectPosts(postUrls) {
 async function scrapeInstagramProfiles(profileLinks, sinceISO, captionKeywords = [], limit = 40) {
   if (!profileLinks.length || !INSTAGRAM_ACTOR_ID) return [];
   const client = apify();
-  const input = {
-    directUrls: profileLinks,
-    resultsType: 'posts',
-    onlyPostsNewerThan: sinceISO,
-    resultsLimit: limit,
-    captionKeywords,
-    addParentData: false
-  };
+  const input = { directUrls: profileLinks, resultsType: 'posts', onlyPostsNewerThan: sinceISO, resultsLimit: limit, captionKeywords, addParentData: false };
   console.log(`Apify IG (profiles): ${profileLinks.length} profiles via key directUrls`);
   const run = await client.actor(INSTAGRAM_ACTOR_ID).call(input);
   console.log(`Apify IG runId=${run.id} datasetId=${run.defaultDatasetId} status=${run.status}`);
@@ -500,11 +467,11 @@ function normalizeInstagramItem(it) {
   console.log(`DB: connected → ${DB_HOST}/${DB_NAME} as ${DB_USER}`);
   await ensureHistoryTables(pg);
 
-  // 2) Select candidate posts from DB
+  // 2) Select candidate posts from DB (now respects DIRECT_POST_WINDOW_DAYS)
   let candidates = await selectPostsToScrape(pg);
   candidates = candidates.filter(c => !!c.post_link);
-  const candSet = new Set(candidates.map(c => canonLink(c.post_link)));
 
+  // log sample
   console.log('Posts to scrape (from DB):');
   candidates.slice(0, 20).forEach((c, i) => console.log(`${i + 1}. [${c.platform}] ${c.post_link}`));
   console.log(`Total candidates: ${candidates.length}${TEST5 ? '  (TEST5: latest 5 TikToks)' : ''}`);
@@ -521,53 +488,81 @@ function normalizeInstagramItem(it) {
     .filter(r => r.platform === 'instagram' || (r.post_link || '').toLowerCase().includes('instagram.com'))
     .map(r => r.post_link);
 
-  // 5) Run Apify (direct posts) using original input shapes
-  const ttItems = await scrapeTiktokDirectPosts(tiktokLinks);
-  const igItems = await scrapeInstagramDirectPosts(instagramLinks);
-
-  // Normalize → snapshots
-  const snapshotsRaw = [];
-  for (const it of ttItems) { const row = normalizeTikTokItem(it); if (row) snapshotsRaw.push(row); }
-  for (const it of igItems) { const row = normalizeInstagramItem(it); if (row) snapshotsRaw.push(row); }
-
-  // IMPORTANT: Filter to only those links we intended to scrape (avoid FK issues from actor overreach)
-  const snapshots = snapshotsRaw.filter(s => s.post_link && candSet.has(canonLink(s.post_link)));
-
-  console.log(`Apify: scraped ${snapshotsRaw.length} snapshots (kept ${snapshots.length} that matched the selected candidates).`);
-
-  // 6) Write to DB (slot) → then cleanup & refresh MVs
   const { slotLabel } = currentSlotUTC();
-  const dbRes = await persistHistoryMetrics(pg, snapshots, slotLabel);
-  console.log(`DB: upserted ${dbRes.written} snapshots (${dbRes.skipped} skipped) for slot ${slotLabel}.`);
 
-  await cleanupHistory(pg);
-  await refreshHistoryMVs(pg, 90);
-  console.log('DB: materialized views refreshed; wide matrix rebuilt.');
-
-  // 7) Mirror to Google Sheets (create new slot column first)
-  let sheets, colIndex1b;
+  // 5) Sheets prep (create new slot col E; build row map once)
+  let sheets, colIndex1b, rowMap;
   if (SHEET_ID) {
     const auth = getGoogleAuth();
     sheets = google.sheets({ version: 'v4', auth });
     await sanityCheckSheets(sheets);
     colIndex1b = await ensureSheetSlotColumn(sheets, slotLabel);
-    await writeViewsToSheet(sheets, colIndex1b, snapshots);
+    rowMap = await buildSheetRowMap(sheets);
   }
 
+  // 6) Direct-post scraping in batches (Option B)
+  async function processDirectChunks(platform, links) {
+    if (!links.length) return;
+    const chunks = chunk(links, Math.max(1, SCRAPE_CHUNK));
+    console.log(`[${platform}] total ${links.length} urls → ${chunks.length} batch(es) of up to ${SCRAPE_CHUNK}.`);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const batch = chunks[i];
+      const candSetBatch = new Set(batch.map(canonLink));
+      console.log(`[${platform}] batch ${i+1}/${chunks.length} (${batch.length} urls)`);
+
+      let items = [];
+      if (platform === 'tiktok') items = await scrapeTiktokDirectPosts(batch);
+      else if (platform === 'instagram') items = await scrapeInstagramDirectPosts(batch);
+
+      // normalize → snapshots
+      const raw = (platform === 'tiktok')
+        ? items.map(normalizeTikTokItem).filter(Boolean)
+        : items.map(normalizeInstagramItem).filter(Boolean);
+
+      // keep only intended candidates (avoid actor overreach)
+      const snapshots = raw.filter(s => s.post_link && candSetBatch.has(canonLink(s.post_link)));
+
+      // write to DB
+      const dbRes = await persistHistoryMetrics(pg, snapshots, slotLabel);
+      console.log(`DB: upserted ${dbRes.written} (${dbRes.skipped} skipped) for this ${platform} batch.`);
+
+      // mirror to Sheets for this batch
+      if (SHEET_ID && colIndex1b) await writeViewsToSheet(sheets, colIndex1b, snapshots, rowMap);
+
+      if (SLEEP_BETWEEN_BATCHES_MS > 0 && i < chunks.length - 1) {
+        console.log(`Sleeping ${SLEEP_BETWEEN_BATCHES_MS}ms before next batch…`);
+        await sleep(SLEEP_BETWEEN_BATCHES_MS);
+      }
+    }
+  }
+
+  await processDirectChunks('tiktok', tiktokLinks);
+  await processDirectChunks('instagram', instagramLinks);
+
+  // 7) Cleanup & MV refresh once
+  await cleanupHistory(pg);
+  await refreshHistoryMVs(pg, 90);
+  console.log('DB: materialized views refreshed; wide matrix rebuilt.');
+
   // 8) TB/IPWT profile discovery (DB → profiles → tagged posts)
-  //    Find recent TB/IPWT profiles (last PROFILE_DISCOVERY_DAYS)
   const { ttProfiles, igProfiles } = await selectTbIpwtProfiles(pg, PROFILE_DISCOVERY_DAYS);
 
-  // TikTok profile run (tag-gated results)
+  // TikTok profile run (tag-gated results) + JS-side recency filter
   let ttProfileItems = [];
   if (ttProfiles.length) {
     ttProfileItems = await scrapeTiktokProfiles(ttProfiles, TAGS_CANON, `${PROFILE_DISCOVERY_DAYS} days`);
+    const cutoffMs = Date.now() - PROFILE_DISCOVERY_DAYS * 86400_000;
+    ttProfileItems = ttProfileItems.filter(it => coerceMs(it.createTime ?? it.createDate ?? it.timestamp ?? it.createTimestamp) >= cutoffMs);
   }
 
-  // Instagram profile run (tag-gated results)
+  // Instagram profile run (tag-gated results) + JS-side recency filter
   let igProfileItems = [];
   if (igProfiles.length) {
-    igProfileItems = await scrapeInstagramProfiles(igProfiles, daysAgoIso(PROFILE_DISCOVERY_DAYS), TAGS_CANON, 60);
+    const sinceISO = daysAgoIso(PROFILE_DISCOVERY_DAYS);
+    igProfileItems = await scrapeInstagramProfiles(igProfiles, sinceISO, TAGS_CANON, 60);
+    const cutoffMs = Date.now() - PROFILE_DISCOVERY_DAYS * 86400_000;
+    igProfileItems = igProfileItems.filter(it => coerceMs(it.timestamp) >= cutoffMs);
   }
 
   // Filter ONLY tagged posts
@@ -576,7 +571,6 @@ function normalizeInstagramItem(it) {
 
   // Build Sheet1 dedupe sets
   if (SHEET_ID) {
-    const rowMap = await buildSheetRowMap(sheets); // matrix C->row
     const ttSheet1Ids = await sheet1TiktokIdSet(sheets);
     const igSheet1Shorts = await sheet1IGShortSet(sheets);
 
@@ -591,36 +585,29 @@ function normalizeInstagramItem(it) {
       if (!url || !postId) continue;
 
       const views = firstNumber(post.playCount, post.viewCount, post.views, post.statistics?.playCount, post.metrics?.plays) ?? '';
-      const row = rowMap.get(url);
+      const row = rowMap?.get(url);
 
       if (row) {
-        // present in matrix → update E
         matrixUpdatesFromDiscovery.push({ range: `${SHEET_TAB}!E${row}`, values: [[views]] });
       } else if (!ttSheet1Ids.has(postId)) {
-        // not in matrix, not in Sheet1 → append to B:F
-        const username =
-          post.authorUsername || post.username || post.ownerUsername ||
-          ((url.match(/tiktok\.com\/@([^\/]+)/) || [,''])[1]);
+        const username = post.authorUsername || post.username || post.ownerUsername || ((url.match(/tiktok\.com\/@([^\/]+)/) || [,''])[1]);
         const profileLink = username ? `https://www.tiktok.com/@${username}` : '';
         const rawCreated = post.createTime ?? post.createDate ?? post.timestamp ?? post.createTimestamp ?? '';
-        const createdMs = typeof rawCreated === 'number'
-          ? (rawCreated < 1e12 ? rawCreated * 1000 : rawCreated)
-          : Date.parse(rawCreated);
-        const pretty = isNaN(createdMs) ? '' : new Date(createdMs).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-        const createdIso = isNaN(createdMs) ? '' : new Date(createdMs).toISOString();
+        const createdMs = coerceMs(rawCreated);
+        const pretty = Number.isFinite(createdMs) ? new Date(createdMs).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) : '';
+        const createdIso = Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : '';
         sheet1TTAppends.push([profileLink, url, views, pretty, createdIso]); // B:F
       }
     }
 
     // --- IG discovery: shortCode-first; update matrix E or append to Sheet1 M:Q ---
-    // map scraped IG by shortCode for quick reuse
     for (const post of igTagged) {
       const link = canonLink(post.url || post.postUrl || post.inputUrl || '');
       const sc = getIGShortCodeFromResult(post);
       if (!sc) continue;
 
       const views = firstNumber(post.videoPlayCount, post.videoViewCount, post.views, post.insights?.video_views, post.metrics?.plays) ?? '';
-      const row = link ? rowMap.get(link) : null;
+      const row = link ? rowMap?.get(link) : null;
 
       if (row) {
         matrixUpdatesFromDiscovery.push({ range: `${SHEET_TAB}!E${row}`, values: [[views]] });
@@ -628,7 +615,7 @@ function normalizeInstagramItem(it) {
         const ownerUsername = post.ownerUsername || '';
         const profileLink = ownerUsername ? `https://www.instagram.com/${ownerUsername}/reels` : (post.ownerUrl || '');
         const ts = post.timestamp || '';
-        const pretty = ts ? new Date(ts).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) : '';
+        const pretty = ts ? new Date(coerceMs(ts)).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) : '';
         const urlFinal = link || (sc ? `https://www.instagram.com/p/${sc}/` : '');
         sheet1IGAppends.push([profileLink, urlFinal, views, pretty, ts]); // M:Q
       }
@@ -636,22 +623,13 @@ function normalizeInstagramItem(it) {
 
     // apply matrix updates from discovery (col E)
     if (matrixUpdatesFromDiscovery.length) {
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: SHEET_ID,
-        resource: { valueInputOption: 'RAW', data: matrixUpdatesFromDiscovery }
-      });
+      await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: SHEET_ID, resource: { valueInputOption: 'RAW', data: matrixUpdatesFromDiscovery } });
       console.log(`Sheets (discovery): updated ${matrixUpdatesFromDiscovery.length} matrix cells in column E.`);
     }
 
     // append Sheet1 rows
-    if (sheet1TTAppends.length) {
-      await sheetAppendRows(sheets, 'B', sheet1TTAppends); // TT B:F
-      console.log(`Sheet1: appended ${sheet1TTAppends.length} TikTok rows to B:F.`);
-    }
-    if (sheet1IGAppends.length) {
-      await sheetAppendRows(sheets, 'M', sheet1IGAppends); // IG M:Q
-      console.log(`Sheet1: appended ${sheet1IGAppends.length} Instagram rows to M:Q.`);
-    }
+    if (sheet1TTAppends.length) { await sheetAppendRows(sheets, 'B', sheet1TTAppends); console.log(`Sheet1: appended ${sheet1TTAppends.length} TikTok rows to B:F.`); }
+    if (sheet1IGAppends.length) { await sheetAppendRows(sheets, 'M', sheet1IGAppends); console.log(`Sheet1: appended ${sheet1IGAppends.length} Instagram rows to M:Q.`); }
   }
 
   await pg.end();

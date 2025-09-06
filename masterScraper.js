@@ -61,7 +61,7 @@ function canonLink(url) {
   let s = String(url).trim();
   s = s.replace(/\?[^#]*$/, '');
   s = s.replace(/#.*/, '');
-  s = s.replace(/\/+$, '');
+  s = s.replace(/\/+$/, '');
   return s || null;
 }
 function firstNumber(...xs) {
